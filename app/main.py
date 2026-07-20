@@ -23,7 +23,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     if not shutil.which(settings.claude_cli_path):
         logger.warning(
             f"claude CLI not found on PATH (claude_cli_path={settings.claude_cli_path!r}) — "
-            "Hermes cannot answer until it's installed/logged in, or CLAUDE_CLI_PATH is set"
+            "cannot answer until it's installed/logged in, or CLAUDE_CLI_PATH is set"
         )
     yield
     logger.info(f"{settings.app_name} shutting down")
@@ -39,4 +39,4 @@ app.include_router(internal_router)
 @app.get("/")
 async def root() -> dict[str, str]:
     """Hello world root endpoint."""
-    return {"message": "Hello, HLAF (Hermes Line Agent Framework)!"}
+    return {"message": "Hello, Claude (LINE Agent)!"}

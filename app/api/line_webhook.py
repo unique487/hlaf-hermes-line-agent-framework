@@ -13,7 +13,7 @@ router = APIRouter(tags=["line"])
 
 
 async def _handle_text_message(user_id: str, reply_token: str, text: str) -> None:
-    """Background task: run Hermes (headless Claude Code) and send the answer back."""
+    """Background task: run the headless Claude Code agent and send the answer back."""
     if text.strip().lower() in {"/reset", "重來"}:
         claude_code_agent.reset_history(user_id)
         await line_client.send_text(reply_token, user_id, "已清除對話記憶與任務狀態,我們重新開始。")
@@ -25,7 +25,7 @@ async def _handle_first_contact(user_id: str, reply_token: str) -> None:
     await line_client.send_text(
         reply_token,
         user_id,
-        "已將你註冊為 Hermes 的管理員(白名單第一人)。\n之後私訊我就可以直接對話囉!",
+        "已將你註冊為管理員(白名單第一人)。\n之後私訊我就可以直接對話囉!",
     )
 
 
@@ -33,7 +33,7 @@ async def _handle_follow_declined(user_id: str, reply_token: str) -> None:
     await line_client.send_text(
         reply_token,
         user_id,
-        "您好,這是 Hermes 專屬帳號,目前僅開放特定使用者使用,暫不提供公開服務,敬請見諒。",
+        "您好,這是專屬帳號,目前僅開放特定使用者使用,暫不提供公開服務,敬請見諒。",
     )
 
 

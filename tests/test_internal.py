@@ -1,5 +1,5 @@
 """Tests for the internal PreToolUse-confirmation endpoint used by the Claude
-Code hook script (scripts/claude_hermes_hook.py)."""
+Code hook script (scripts/claude_confirm_hook.py)."""
 
 import asyncio
 from unittest.mock import AsyncMock, patch
@@ -110,7 +110,7 @@ async def test_confirm_flow_times_out_as_rejection(monkeypatch) -> None:
     claude_code_agent._sessions[USER] = SESSION
     claude_code_agent._session_to_user[SESSION] = USER
     task_state.start(USER)
-    monkeypatch.setattr(get_settings(), "hermes_confirm_timeout_seconds", 0)
+    monkeypatch.setattr(get_settings(), "confirm_timeout_seconds", 0)
 
     from app.api.internal import ClaudeConfirmRequest, claude_confirm
 

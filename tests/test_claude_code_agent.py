@@ -98,7 +98,7 @@ async def test_confirm_reply_without_pending_task_is_ignored() -> None:
 
 
 async def test_run_task_happy_path_streams_tool_use_and_result(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(get_settings(), "hermes_desktop_root", str(tmp_path))
+    monkeypatch.setattr(get_settings(), "desktop_root", str(tmp_path))
     lines = [
         _tool_use_event("Read", {"file_path": "note.txt"}),
         _result_event("讀完了,內容是 hello"),
@@ -125,7 +125,7 @@ async def test_run_task_happy_path_streams_tool_use_and_result(tmp_path, monkeyp
 
 
 async def test_run_task_resumes_existing_session_on_second_turn(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(get_settings(), "hermes_desktop_root", str(tmp_path))
+    monkeypatch.setattr(get_settings(), "desktop_root", str(tmp_path))
     fake_proc = _FakeProcess([_result_event("第一句回覆")])
 
     with (
@@ -157,7 +157,7 @@ async def test_run_task_resumes_existing_session_on_second_turn(tmp_path, monkey
 
 
 async def test_reset_history_drops_session_mapping(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(get_settings(), "hermes_desktop_root", str(tmp_path))
+    monkeypatch.setattr(get_settings(), "desktop_root", str(tmp_path))
     fake_proc = _FakeProcess([_result_event("嗨")])
     with (
         patch(
@@ -175,7 +175,7 @@ async def test_reset_history_drops_session_mapping(tmp_path, monkeypatch) -> Non
 
 
 async def test_run_task_claude_cli_missing_reports_friendly_error(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(get_settings(), "hermes_desktop_root", str(tmp_path))
+    monkeypatch.setattr(get_settings(), "desktop_root", str(tmp_path))
 
     async def _raise_not_found(*_args, **_kwargs):
         raise FileNotFoundError
@@ -194,7 +194,7 @@ async def test_run_task_claude_cli_missing_reports_friendly_error(tmp_path, monk
 
 
 async def test_run_task_no_result_event_reports_failure(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(get_settings(), "hermes_desktop_root", str(tmp_path))
+    monkeypatch.setattr(get_settings(), "desktop_root", str(tmp_path))
     fake_proc = _FakeProcess([], returncode=1, stderr=b"boom")
 
     with (

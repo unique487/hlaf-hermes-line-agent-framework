@@ -1,5 +1,5 @@
-# 一鍵啟動 Hermes:FastAPI 伺服器 + ngrok 通道
-# 用法: ./scripts/start-hermes.ps1 [-Domain your-static-domain.ngrok-free.app]
+# 一鍵啟動:FastAPI 伺服器 + ngrok 通道
+# 用法: ./scripts/start-claude-agent.ps1 [-Domain your-static-domain.ngrok-free.app]
 param(
     [string]$Domain = $env:NGROK_DOMAIN,
     [int]$Port = 8000

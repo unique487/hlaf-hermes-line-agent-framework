@@ -14,7 +14,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "HLAF"
+    app_name: str = "Claude"
     app_env: str = "development"
     debug: bool = False
     host: str = "0.0.0.0"
@@ -26,31 +26,31 @@ class Settings(BaseSettings):
     line_channel_access_token: str = ""
 
     # --- Access control ---
-    # Comma-separated LINE userIds allowed to talk to Hermes.
+    # Comma-separated LINE userIds allowed to talk to this bot.
     # Empty = first user to DM the OA is captured as admin (stored in allowlist file).
     allowed_line_user_ids: str = ""
     allowlist_file: str = "config/allowlist.json"
 
-    # --- Desktop agent (Hermes controlling this computer via LINE, driven by
-    # the local headless Claude Code CLI: `claude -p`) ---
+    # --- Desktop agent (LINE controls this computer, driven by the local
+    # headless Claude Code CLI: `claude -p`) ---
     # Tool calls (Read/Glob/Grep/LS) targeting paths outside this root pause for
     # LINE confirmation; Bash/Write/Edit/MultiEdit always pause regardless of path.
-    hermes_desktop_root: str = r"G:\我的雲端硬碟\Hermes agent"
-    hermes_progress_interval_seconds: int = 300
-    hermes_confirm_timeout_seconds: int = 600
+    desktop_root: str = r"G:\我的雲端硬碟\claude\LINE"
+    progress_interval_seconds: int = 300
+    confirm_timeout_seconds: int = 600
     # Path/command used to invoke the Claude Code CLI. Override with a full
-    # path if `claude` isn't on PATH for the process running Hermes.
+    # path if `claude` isn't on PATH for the process running this service.
     claude_cli_path: str = "claude"
     # Overall wall-clock timeout for one `claude -p` invocation (one LINE turn).
-    hermes_claude_timeout_seconds: int = 1800
-    # Base URL the PreToolUse hook script (scripts/claude_hermes_hook.py) uses
+    claude_timeout_seconds: int = 1800
+    # Base URL the PreToolUse hook script (scripts/claude_confirm_hook.py) uses
     # to call back into this process for dangerous-action confirmation. Empty
     # = derived from `port` (see `internal_base_url`).
-    hermes_internal_base_url: str = ""
+    internal_base_url_override: str = ""
 
     @property
     def internal_base_url(self) -> str:
-        return self.hermes_internal_base_url or f"http://127.0.0.1:{self.port}"
+        return self.internal_base_url_override or f"http://127.0.0.1:{self.port}"
 
     @property
     def env_allowed_user_ids(self) -> list[str]:

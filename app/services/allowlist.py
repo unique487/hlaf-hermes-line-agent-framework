@@ -1,4 +1,4 @@
-"""Allowlist of LINE userIds permitted to talk to Hermes.
+"""Allowlist of LINE userIds permitted to talk to this bot.
 
 Sources, in priority order:
 1. `ALLOWED_LINE_USER_IDS` env var (comma-separated) — if set, it is the whole list.

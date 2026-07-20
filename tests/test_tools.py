@@ -14,7 +14,7 @@ from app.services import tools
 
 @pytest.fixture(autouse=True)
 def _root(tmp_path, monkeypatch):
-    monkeypatch.setattr(get_settings(), "hermes_desktop_root", str(tmp_path))
+    monkeypatch.setattr(get_settings(), "desktop_root", str(tmp_path))
     return tmp_path
 
 

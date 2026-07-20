@@ -1,6 +1,6 @@
 """Internal-only endpoints for the Claude Code PreToolUse hook.
 
-`scripts/claude_hermes_hook.py` runs as a child process of the `claude` CLI,
+`scripts/claude_confirm_hook.py` runs as a child process of the `claude` CLI,
 which is itself spawned by `app.services.claude_code_agent` on this same
 machine. It POSTs here to turn a "dangerous tool call" into a blocking LINE
 Yes/No round-trip. This router must never be reachable from anywhere but
@@ -57,7 +57,7 @@ async def claude_confirm(payload: ClaudeConfirmRequest, request: Request) -> dic
     await line_client.push_confirm(user_id, payload.description)
     try:
         await asyncio.wait_for(
-            task.confirm_event.wait(), timeout=settings.hermes_confirm_timeout_seconds
+            task.confirm_event.wait(), timeout=settings.confirm_timeout_seconds
         )
     except TimeoutError:
         await line_client.push_text(user_id, "確認逾時,已自動取消這個動作。")

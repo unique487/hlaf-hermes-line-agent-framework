@@ -1,10 +1,10 @@
-"""Hermes desktop agent: drives the local headless Claude Code CLI (`claude -p`).
+"""LINE-driven desktop agent: drives the local headless Claude Code CLI (`claude -p`).
 
 Single entry point is `handle_message`. Every LINE message spawns (or resumes)
 a `claude -p --output-format stream-json` subprocess as the "brain" — no more
 hand-rolled JSON tool-calling loop. Claude Code uses its own built-in tools
 (Read/Write/Edit/Bash/...) directly; dangerous calls are gated by the
-PreToolUse hook (`scripts/claude_hermes_hook.py`), which blocks until this
+PreToolUse hook (`scripts/claude_confirm_hook.py`), which blocks until this
 module's `/internal/claude-confirm` endpoint (see `app/api/internal.py`)
 resolves a LINE Yes/No round-trip.
 
@@ -21,14 +21,14 @@ from pathlib import Path
 
 from app.config import get_settings
 from app.logger import logger
-from app.prompts.hermes import desktop_system_prompt
+from app.prompts.persona import desktop_system_prompt
 from app.services import line_client, task_state
 from app.services.task_state import CONFIRM_NO, CONFIRM_YES, TaskState
 
 STATUS_KEYWORDS = {"進度", "狀態", "/status"}
 
 _HOOK_SETTINGS_FILE = (
-    Path(__file__).resolve().parent.parent.parent / "config" / "claude_hermes_settings.json"
+    Path(__file__).resolve().parent.parent.parent / "config" / "claude_hooks.json"
 )
 
 # LINE user_id -> Claude Code session id, for multi-turn `--resume`.
@@ -108,15 +108,10 @@ def _build_command(
 ) -> list[str]:
     """Build the `claude -p` argv.
 
-    NOTE (unverified assumption): flag names/behavior follow the Claude Code
-    CLI conventions as documented (`-p`/`--print`, `--output-format
-    stream-json`, `--resume`, `--session-id`, `--add-dir`, `--settings`,
-    `--append-system-prompt`). The prompt text itself is passed by the caller
-    as the final positional argv element (after all flags) — also assumed,
-    not verified against a real binary. This has not been exercised against a
-    real `claude` binary in this environment — cross-check with `claude
-    --help` on the machine that actually runs Hermes before relying on it in
-    production.
+    Verified against a real, logged-in `claude` CLI (v2.1.215): `-p`,
+    `--output-format stream-json`, `--resume`, `--session-id`, `--add-dir`,
+    `--settings`, `--append-system-prompt`, and passing the prompt text as
+    the final positional argv element all behave as expected.
     """
     cmd = [
         claude_cli_path,
@@ -137,8 +132,8 @@ def _build_command(
 
 def _subprocess_env(settings) -> dict[str, str]:
     env = dict(os.environ)
-    env["HERMES_INTERNAL_BASE_URL"] = settings.internal_base_url
-    env["HERMES_DESKTOP_ROOT"] = settings.hermes_desktop_root
+    env["CLAUDE_INTERNAL_BASE_URL"] = settings.internal_base_url
+    env["CLAUDE_DESKTOP_ROOT"] = settings.desktop_root
     return env
 
 
@@ -149,14 +144,14 @@ async def _run_claude(user_id: str, task: TaskState, text: str) -> str:
     _sessions[user_id] = session_id
     _session_to_user[session_id] = user_id
 
-    cmd = _build_command(settings.claude_cli_path, settings.hermes_desktop_root, session_id, resume)
+    cmd = _build_command(settings.claude_cli_path, settings.desktop_root, session_id, resume)
     logger.info(f"Spawning claude for user {user_id[:8]}… session={session_id} resume={resume}")
 
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             str(text),
-            cwd=settings.hermes_desktop_root,
+            cwd=settings.desktop_root,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=_subprocess_env(settings),
@@ -170,7 +165,7 @@ async def _run_claude(user_id: str, task: TaskState, text: str) -> str:
 
     try:
         final_answer = await asyncio.wait_for(
-            _consume_stream(proc, task), timeout=settings.hermes_claude_timeout_seconds
+            _consume_stream(proc, task), timeout=settings.claude_timeout_seconds
         )
     except TimeoutError:
         proc.kill()
@@ -253,7 +248,7 @@ async def _progress_pinger(user_id: str, task: TaskState) -> None:
     settings = get_settings()
     try:
         while True:
-            await asyncio.sleep(settings.hermes_progress_interval_seconds)
+            await asyncio.sleep(settings.progress_interval_seconds)
             if task.status == "running":
                 log = "\n".join(task.steps[-3:]) or "(執行中)"
                 await line_client.push_text(user_id, f"[進度回報] 第 {task.step_count} 步\n{log}")

@@ -3,9 +3,9 @@
 Actual tool execution (Read/Write/Edit/Bash/...) is done by the Claude Code
 CLI itself now — this module no longer runs any tools. It only decides
 whether a given tool call is "dangerous" (must be confirmed via LINE before
-the hook approves it) and resolves paths relative to `hermes_desktop_root`.
+the hook approves it) and resolves paths relative to `desktop_root`.
 
-Imported directly by `scripts/claude_hermes_hook.py` (the Claude Code
+Imported directly by `scripts/claude_confirm_hook.py` (the Claude Code
 PreToolUse hook), which runs as a separate subprocess in the same repo/venv.
 """
 
@@ -18,12 +18,12 @@ from app.config import get_settings
 _ALWAYS_DANGEROUS_TOOLS = {"Bash", "Write", "Edit", "MultiEdit"}
 
 # Read-only tools: only dangerous if the path they target falls outside
-# `hermes_desktop_root`.
+# `desktop_root`.
 _SCOPE_CHECKED_TOOLS = {"Read", "Glob", "Grep", "LS"}
 
 
 def _root() -> Path:
-    return Path(get_settings().hermes_desktop_root).resolve()
+    return Path(get_settings().desktop_root).resolve()
 
 
 def resolve_path(raw: str) -> tuple[Path, bool]:
@@ -45,7 +45,7 @@ def _extract_path(tool_input: dict) -> str:
     CLI version); Glob/Grep may also carry a `pattern` with no directory,
     in which case we fall back to the (unresolved) pattern text — this
     means a directory-less pattern like `**/*.py` resolves relative to
-    `hermes_desktop_root` and is therefore treated as in-scope.
+    `desktop_root` and is therefore treated as in-scope.
     """
     return tool_input.get("file_path") or tool_input.get("path") or tool_input.get("pattern") or ""
 

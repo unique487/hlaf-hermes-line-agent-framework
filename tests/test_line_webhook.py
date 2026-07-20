@@ -89,11 +89,11 @@ def test_allowed_user_message_reaches_claude_code_agent() -> None:
     from app.services import allowlist
 
     allowlist.capture_first_admin("U-admin")
-    body = _text_event_payload("U-admin", "你好 Hermes")
+    body = _text_event_payload("U-admin", "你好 Claude")
     with patch("app.api.line_webhook.claude_code_agent.handle_message", new=AsyncMock()) as handle:
         resp = client.post("/line/webhook", content=body, headers={"X-Line-Signature": _sign(body)})
     assert resp.status_code == 200
-    handle.assert_awaited_once_with("U-admin", "reply-token-1", "你好 Hermes")
+    handle.assert_awaited_once_with("U-admin", "reply-token-1", "你好 Claude")
 
 
 def test_non_allowlisted_user_is_ignored() -> None:

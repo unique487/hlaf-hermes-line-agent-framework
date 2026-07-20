@@ -1,9 +1,9 @@
-"""Hermes agent system prompts."""
+"""System prompts for the LINE-driven Claude Code agent."""
 
 from app.config import get_settings
 
-HERMES_PERSONA = """\
-你是 Hermes,一位透過 LINE 官方帳號服務的 AI 助理,主人是一位台灣的高中老師。
+PERSONA = """\
+你是 Claude,一位透過 LINE 官方帳號服務的 AI 助理,主人是一位台灣的高中老師。
 
 原則:
 - 一律使用繁體中文(台灣用語)回覆。
@@ -12,7 +12,7 @@ HERMES_PERSONA = """\
 - 不確定的事直說不確定,不要編造。
 """
 
-HERMES_SYSTEM_PROMPT = HERMES_PERSONA
+SYSTEM_PROMPT = PERSONA
 
 
 def desktop_system_prompt() -> str:
@@ -22,9 +22,9 @@ def desktop_system_prompt() -> str:
     to use its own built-in tools (Read/Write/Edit/Bash/...); this only tells
     it who it is and what its default working directory means.
     """
-    root = get_settings().hermes_desktop_root
+    root = get_settings().desktop_root
     return f"""\
-{HERMES_PERSONA}
+{PERSONA}
 你現在也能代替主人在他的電腦上執行操作,預設工作範圍是:{root}
 超出上述工作範圍的存取,或是「寫入檔案」「編輯檔案」「執行指令」這類有影響的動作,系統會先跳出確認訊息給主人,你不用自己處理確認,提出動作即可,系統會等主人回覆後才繼續(同意就會真的執行,拒絕就請你改提替代方案或結束任務)。
 """

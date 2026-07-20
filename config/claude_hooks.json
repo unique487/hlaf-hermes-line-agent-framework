@@ -1,0 +1,17 @@
+{
+  "$comment": "Passed to `claude -p ... --settings config/claude_hooks.json` by app/services/claude_code_agent.py. Registers scripts/claude_confirm_hook.py as a PreToolUse hook for every tool call — the script decides approve/block itself (see app/services/tools.is_dangerous), so the matcher intentionally covers all tools rather than a subset. Verified against a real, logged-in `claude` CLI (v2.1.215): this hooks JSON shape (hooks.PreToolUse[].matcher/hooks[].type=command/command/timeout) and the $CLAUDE_PROJECT_DIR variable both work as expected.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/scripts/claude_confirm_hook.py\"",
+            "timeout": 630
+          }
+        ]
+      }
+    ]
+  }
+}
