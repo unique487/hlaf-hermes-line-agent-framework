@@ -1,0 +1,18 @@
+# Google Drive 系統檔
+desktop.ini
+*.tmp
+~$*
+
+# 敏感資料
+.env
+*.key
+credentials.*
+
+# Claude Code 本地設定（含 permissions、可能記錄 token，絕不上雲）
+# 但 .claude/skills/（專案級客製化技能）要保留追蹤，故用排除法而非整個資料夾封鎖
+.claude/*
+!.claude/skills/
+
+# Node.js
+node_modules/
+package-lock.json
