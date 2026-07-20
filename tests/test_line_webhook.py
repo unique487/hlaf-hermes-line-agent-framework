@@ -85,22 +85,15 @@ def test_first_contact_captures_admin_and_greets() -> None:
     assert not allowlist.is_allowed("U-stranger")
 
 
-def test_allowed_user_message_reaches_hermes() -> None:
+def test_allowed_user_message_reaches_desktop_agent() -> None:
     from app.services import allowlist
 
     allowlist.capture_first_admin("U-admin")
     body = _text_event_payload("U-admin", "你好 Hermes")
-    with (
-        patch(
-            "app.api.line_webhook.hermes_agent.ask_hermes",
-            new=AsyncMock(return_value="你好!"),
-        ) as ask,
-        patch("app.api.line_webhook.line_client.send_text", new=AsyncMock()) as send,
-    ):
+    with patch("app.api.line_webhook.desktop_agent.handle_message", new=AsyncMock()) as handle:
         resp = client.post("/line/webhook", content=body, headers={"X-Line-Signature": _sign(body)})
     assert resp.status_code == 200
-    ask.assert_awaited_once_with("U-admin", "你好 Hermes")
-    send.assert_awaited_once_with("reply-token-1", "U-admin", "你好!")
+    handle.assert_awaited_once_with("U-admin", "reply-token-1", "你好 Hermes")
 
 
 def test_non_allowlisted_user_is_ignored() -> None:
@@ -109,13 +102,28 @@ def test_non_allowlisted_user_is_ignored() -> None:
     allowlist.capture_first_admin("U-admin")
     body = _text_event_payload("U-stranger", "在嗎?")
     with (
-        patch("app.api.line_webhook.hermes_agent.ask_hermes", new=AsyncMock()) as ask,
+        patch("app.api.line_webhook.desktop_agent.handle_message", new=AsyncMock()) as handle,
         patch("app.api.line_webhook.line_client.send_text", new=AsyncMock()) as send,
     ):
         resp = client.post("/line/webhook", content=body, headers={"X-Line-Signature": _sign(body)})
     assert resp.status_code == 200
-    ask.assert_not_awaited()
+    handle.assert_not_awaited()
     send.assert_not_awaited()
+
+
+def test_reset_clears_desktop_agent_state() -> None:
+    from app.services import allowlist
+
+    allowlist.capture_first_admin("U-admin")
+    body = _text_event_payload("U-admin", "/reset")
+    with (
+        patch("app.api.line_webhook.desktop_agent.reset_history") as reset,
+        patch("app.api.line_webhook.line_client.send_text", new=AsyncMock()) as send,
+    ):
+        resp = client.post("/line/webhook", content=body, headers={"X-Line-Signature": _sign(body)})
+    assert resp.status_code == 200
+    reset.assert_called_once_with("U-admin")
+    send.assert_awaited_once()
 
 
 def test_follow_before_any_admin_is_silent() -> None:

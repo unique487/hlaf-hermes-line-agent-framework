@@ -4,10 +4,13 @@ import httpx
 
 from app.config import get_settings
 from app.logger import logger
+from app.services.task_state import CONFIRM_NO, CONFIRM_YES
 
 LINE_API_BASE = "https://api.line.me/v2/bot"
 # LINE text messages are capped at 5000 characters.
 MAX_TEXT_LEN = 5000
+# LINE confirm template: text max 240 chars, button labels max 20 chars.
+MAX_CONFIRM_TEXT_LEN = 240
 
 
 def _headers() -> dict[str, str]:
@@ -54,3 +57,34 @@ async def send_text(reply_token: str, user_id: str, text: str) -> None:
     """Reply first; if the token is no longer valid, fall back to push."""
     if not await reply_text(reply_token, text):
         await push_text(user_id, text)
+
+
+async def push_confirm(user_id: str, description: str) -> bool:
+    """Push a Yes/No confirm-template message; buttons send fixed reply text."""
+    text = (description.strip() or "需要確認")[:MAX_CONFIRM_TEXT_LEN]
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"{LINE_API_BASE}/message/push",
+            headers=_headers(),
+            json={
+                "to": user_id,
+                "messages": [
+                    {
+                        "type": "template",
+                        "altText": text,
+                        "template": {
+                            "type": "confirm",
+                            "text": text,
+                            "actions": [
+                                {"type": "message", "label": "✅ 執行", "text": CONFIRM_YES},
+                                {"type": "message", "label": "❌ 取消", "text": CONFIRM_NO},
+                            ],
+                        },
+                    }
+                ],
+            },
+        )
+    if resp.status_code == 200:
+        return True
+    logger.error(f"LINE confirm push failed ({resp.status_code}): {resp.text}")
+    return False

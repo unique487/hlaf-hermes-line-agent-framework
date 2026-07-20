@@ -6,7 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from app.config import get_settings
 from app.logger import logger
-from app.services import allowlist, hermes_agent, line_client
+from app.services import allowlist, desktop_agent, line_client
 from app.utils.line_signature import verify_line_signature
 
 router = APIRouter(tags=["line"])
@@ -15,11 +15,10 @@ router = APIRouter(tags=["line"])
 async def _handle_text_message(user_id: str, reply_token: str, text: str) -> None:
     """Background task: run Hermes and send the answer back."""
     if text.strip().lower() in {"/reset", "重來"}:
-        hermes_agent.reset_history(user_id)
-        await line_client.send_text(reply_token, user_id, "已清除對話記憶,我們重新開始。")
+        desktop_agent.reset_history(user_id)
+        await line_client.send_text(reply_token, user_id, "已清除對話記憶與任務狀態,我們重新開始。")
         return
-    answer = await hermes_agent.ask_hermes(user_id, text)
-    await line_client.send_text(reply_token, user_id, answer)
+    await desktop_agent.handle_message(user_id, reply_token, text)
 
 
 async def _handle_first_contact(user_id: str, reply_token: str) -> None:

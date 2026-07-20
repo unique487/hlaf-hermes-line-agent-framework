@@ -1,28 +1,11 @@
-"""Hermes agent brain — OpenCode Zen (OpenAI-compatible) with model fallback.
-
-Keeps a short in-memory conversation history per user so follow-up
-messages have context. History is lost on server restart (by design for now).
-"""
-
-from collections import defaultdict, deque
+"""Stateless chat completion against OpenCode Zen (OpenAI-compatible), with model fallback."""
 
 import httpx
 
 from app.config import get_settings
 from app.logger import logger
-from app.prompts.hermes import HERMES_SYSTEM_PROMPT
-
-# Per-user rolling history of {"role": ..., "content": ...} entries.
-_HISTORY_MAX_MESSAGES = 20
-_history: dict[str, deque[dict[str, str]]] = defaultdict(
-    lambda: deque(maxlen=_HISTORY_MAX_MESSAGES)
-)
 
 FALLBACK_REPLY = "Hermes 暫時連不上大腦(所有模型都失敗了),請稍後再試。"
-
-
-def reset_history(user_id: str) -> None:
-    _history.pop(user_id, None)
 
 
 async def _chat_completion(model: str, messages: list[dict[str, str]]) -> str:
@@ -44,15 +27,8 @@ async def _chat_completion(model: str, messages: list[dict[str, str]]) -> str:
     return content.strip()
 
 
-async def ask_hermes(user_id: str, text: str) -> str:
-    """Answer a user message, trying each configured model in order."""
-    history = _history[user_id]
-    messages = [
-        {"role": "system", "content": HERMES_SYSTEM_PROMPT},
-        *history,
-        {"role": "user", "content": text},
-    ]
-
+async def chat_completion(messages: list[dict[str, str]]) -> str:
+    """Send a message list to Zen, trying each configured model in order."""
     for model in get_settings().zen_model_list:
         try:
             answer = await _chat_completion(model, messages)
@@ -60,8 +36,6 @@ async def ask_hermes(user_id: str, text: str) -> str:
             logger.warning(f"Zen model '{model}' failed: {exc}")
             continue
         logger.info(f"Zen model '{model}' answered ({len(answer)} chars)")
-        history.append({"role": "user", "content": text})
-        history.append({"role": "assistant", "content": answer})
         return answer
 
     logger.error("All Zen models failed")

@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     allowed_line_user_ids: str = ""
     allowlist_file: str = "config/allowlist.json"
 
+    # --- Desktop agent (Hermes controlling this computer via LINE) ---
+    # Tool calls (read_file/list_dir) targeting paths outside this root pause
+    # for LINE confirmation; write_file/run_shell always pause regardless of path.
+    hermes_desktop_root: str = r"G:\我的雲端硬碟\claude"
+    hermes_progress_interval_seconds: int = 300
+    hermes_max_tool_steps: int = 25
+    hermes_confirm_timeout_seconds: int = 600
+
     @property
     def zen_model_list(self) -> list[str]:
         return [m.strip() for m in self.opencode_zen_models.split(",") if m.strip()]
