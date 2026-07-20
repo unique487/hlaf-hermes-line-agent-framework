@@ -118,6 +118,48 @@ def test_non_allowlisted_user_is_ignored() -> None:
     send.assert_not_awaited()
 
 
+def test_follow_before_any_admin_is_silent() -> None:
+    body = json.dumps(
+        {
+            "events": [
+                {
+                    "type": "follow",
+                    "replyToken": "reply-token-3",
+                    "source": {"type": "user", "userId": "U-first-ever"},
+                }
+            ]
+        }
+    ).encode()
+    with patch("app.api.line_webhook.line_client.send_text", new=AsyncMock()) as send:
+        resp = client.post("/line/webhook", content=body, headers={"X-Line-Signature": _sign(body)})
+    assert resp.status_code == 200
+    send.assert_not_awaited()
+
+
+def test_follow_after_admin_exists_sends_decline() -> None:
+    from app.services import allowlist
+
+    allowlist.capture_first_admin("U-admin")
+    body = json.dumps(
+        {
+            "events": [
+                {
+                    "type": "follow",
+                    "replyToken": "reply-token-4",
+                    "source": {"type": "user", "userId": "U-new-follower"},
+                }
+            ]
+        }
+    ).encode()
+    with patch("app.api.line_webhook.line_client.send_text", new=AsyncMock()) as send:
+        resp = client.post("/line/webhook", content=body, headers={"X-Line-Signature": _sign(body)})
+    assert resp.status_code == 200
+    send.assert_awaited_once()
+    assert send.await_args.args[0] == "reply-token-4"
+    assert send.await_args.args[1] == "U-new-follower"
+    assert "僅開放特定使用者" in send.await_args.args[2]
+
+
 def test_group_messages_are_skipped() -> None:
     body = json.dumps(
         {

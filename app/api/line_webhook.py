@@ -30,6 +30,14 @@ async def _handle_first_contact(user_id: str, reply_token: str) -> None:
     )
 
 
+async def _handle_follow_declined(user_id: str, reply_token: str) -> None:
+    await line_client.send_text(
+        reply_token,
+        user_id,
+        "您好,這是 Hermes 專屬帳號,目前僅開放特定使用者使用,暫不提供公開服務,敬請見諒。",
+    )
+
+
 @router.post("/line/webhook")
 async def line_webhook(
     request: Request,
@@ -50,16 +58,25 @@ async def line_webhook(
 
     for event in payload.get("events", []):
         source = event.get("source", {})
-        if event.get("type") != "message" or source.get("type") != "user":
-            logger.debug(f"Skipping event type={event.get('type')} source={source.get('type')}")
+        event_type = event.get("type")
+        user_id = source.get("userId", "")
+        reply_token = event.get("replyToken", "")
+
+        if event_type == "follow":
+            # Someone added the OA as a friend. Only greet strangers — if no
+            # admin exists yet, stay quiet and let their first message capture them.
+            if user_id and reply_token and allowlist.get_allowed_ids():
+                background_tasks.add_task(_handle_follow_declined, user_id, reply_token)
+            continue
+
+        if event_type != "message" or source.get("type") != "user":
+            logger.debug(f"Skipping event type={event_type} source={source.get('type')}")
             continue
         message = event.get("message", {})
         if message.get("type") != "text":
             logger.debug(f"Skipping non-text message type={message.get('type')}")
             continue
 
-        user_id = source.get("userId", "")
-        reply_token = event.get("replyToken", "")
         text = message.get("text", "")
         if not user_id or not reply_token:
             continue
@@ -68,6 +85,8 @@ async def line_webhook(
             background_tasks.add_task(_handle_first_contact, user_id, reply_token)
             continue
         if not allowlist.is_allowed(user_id):
+            # Silent ignore: no reply, no read receipt — indistinguishable
+            # from the OA being offline to a non-allowlisted user.
             logger.info(f"Ignored message from non-allowlisted user {user_id[:8]}…")
             continue
 
