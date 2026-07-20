@@ -7,6 +7,7 @@ desktop.ini
 .env
 *.key
 credentials.*
+config/allowlist.json
 
 # Claude Code 本地設定（含 permissions、可能記錄 token，絕不上雲）
 # 但 .claude/skills/（專案級客製化技能）要保留追蹤，故用排除法而非整個資料夾封鎖
