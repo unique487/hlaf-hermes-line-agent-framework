@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     # --- Desktop agent (Hermes controlling this computer via LINE) ---
     # Tool calls (read_file/list_dir) targeting paths outside this root pause
     # for LINE confirmation; write_file/run_shell always pause regardless of path.
-    hermes_desktop_root: str = r"G:\我的雲端硬碟\claude"
+    hermes_desktop_root: str = r"G:\我的雲端硬碟\Hermes agent"
     hermes_progress_interval_seconds: int = 300
     hermes_max_tool_steps: int = 25
     hermes_confirm_timeout_seconds: int = 600
