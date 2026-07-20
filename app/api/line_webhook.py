@@ -6,19 +6,19 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from app.config import get_settings
 from app.logger import logger
-from app.services import allowlist, desktop_agent, line_client
+from app.services import allowlist, claude_code_agent, line_client
 from app.utils.line_signature import verify_line_signature
 
 router = APIRouter(tags=["line"])
 
 
 async def _handle_text_message(user_id: str, reply_token: str, text: str) -> None:
-    """Background task: run Hermes and send the answer back."""
+    """Background task: run Hermes (headless Claude Code) and send the answer back."""
     if text.strip().lower() in {"/reset", "重來"}:
-        desktop_agent.reset_history(user_id)
+        claude_code_agent.reset_history(user_id)
         await line_client.send_text(reply_token, user_id, "已清除對話記憶與任務狀態,我們重新開始。")
         return
-    await desktop_agent.handle_message(user_id, reply_token, text)
+    await claude_code_agent.handle_message(user_id, reply_token, text)
 
 
 async def _handle_first_contact(user_id: str, reply_token: str) -> None:

@@ -1,11 +1,13 @@
 """FastAPI application entrypoint."""
 
+import shutil
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 from app.api.health import router as health_router
+from app.api.internal import router as internal_router
 from app.api.line_webhook import router as line_webhook_router
 from app.config import get_settings
 from app.logger import logger
@@ -18,8 +20,11 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     logger.info(f"{settings.app_name} starting up in '{settings.app_env}' mode")
     if not settings.line_channel_secret or not settings.line_channel_access_token:
         logger.warning("LINE credentials not set — /line/webhook will reject all calls")
-    if not settings.opencode_zen_api_key:
-        logger.warning("OPENCODE_ZEN_API_KEY not set — Hermes cannot answer")
+    if not shutil.which(settings.claude_cli_path):
+        logger.warning(
+            f"claude CLI not found on PATH (claude_cli_path={settings.claude_cli_path!r}) — "
+            "Hermes cannot answer until it's installed/logged in, or CLAUDE_CLI_PATH is set"
+        )
     yield
     logger.info(f"{settings.app_name} shutting down")
 
@@ -28,6 +33,7 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 app.include_router(health_router)
 app.include_router(line_webhook_router)
+app.include_router(internal_router)
 
 
 @app.get("/")

@@ -1,24 +1,25 @@
-"""Tools the desktop agent can call: file I/O and shell execution.
+"""Path-scope and danger-classification logic shared by the Claude Code hook.
 
-All paths are resolved against `hermes_desktop_root` from settings. Calls that
-stay inside that root are considered safe for read-only tools; everything
-else (or any write/shell call) is flagged dangerous by `is_dangerous` and
-must be confirmed by the caller before the tool actually runs.
+Actual tool execution (Read/Write/Edit/Bash/...) is done by the Claude Code
+CLI itself now — this module no longer runs any tools. It only decides
+whether a given tool call is "dangerous" (must be confirmed via LINE before
+the hook approves it) and resolves paths relative to `hermes_desktop_root`.
+
+Imported directly by `scripts/claude_hermes_hook.py` (the Claude Code
+PreToolUse hook), which runs as a separate subprocess in the same repo/venv.
 """
 
-import asyncio
 from pathlib import Path
 
 from app.config import get_settings
 
-MAX_READ_CHARS = 4000
-MAX_SHELL_OUTPUT_CHARS = 3000
-MAX_LIST_ENTRIES = 200
-SHELL_TIMEOUT_SECONDS = 120
+# Claude Code built-in tools that always require confirmation, regardless of
+# the path/command involved.
+_ALWAYS_DANGEROUS_TOOLS = {"Bash", "Write", "Edit", "MultiEdit"}
 
-
-class ToolError(Exception):
-    """Raised when a tool cannot complete; the message is shown to the model."""
+# Read-only tools: only dangerous if the path they target falls outside
+# `hermes_desktop_root`.
+_SCOPE_CHECKED_TOOLS = {"Read", "Glob", "Grep", "LS"}
 
 
 def _root() -> Path:
@@ -36,78 +37,27 @@ def resolve_path(raw: str) -> tuple[Path, bool]:
     return resolved, in_scope
 
 
-def is_dangerous(tool_name: str, args: dict) -> bool:
+def _extract_path(tool_input: dict) -> str:
+    """Best-effort extraction of the path a scope-checked tool targets.
+
+    Different Claude Code built-in tools use different argument names:
+    Read/Glob/Grep/LS use `file_path` or `path` (the exact key can vary by
+    CLI version); Glob/Grep may also carry a `pattern` with no directory,
+    in which case we fall back to the (unresolved) pattern text — this
+    means a directory-less pattern like `**/*.py` resolves relative to
+    `hermes_desktop_root` and is therefore treated as in-scope.
+    """
+    return tool_input.get("file_path") or tool_input.get("path") or tool_input.get("pattern") or ""
+
+
+def is_dangerous(tool_name: str, tool_input: dict) -> bool:
     """Whether this tool call must be confirmed by the user before running."""
-    if tool_name in {"write_file", "run_shell"}:
+    if tool_name in _ALWAYS_DANGEROUS_TOOLS:
         return True
-    if tool_name in {"read_file", "list_dir"}:
-        _, in_scope = resolve_path(args.get("path", ""))
+    if tool_name in _SCOPE_CHECKED_TOOLS:
+        path = _extract_path(tool_input)
+        if not path:
+            return False
+        _, in_scope = resolve_path(path)
         return not in_scope
-    return True  # unknown tools are rejected by the caller anyway
-
-
-async def read_file(path: str) -> str:
-    resolved, _ = resolve_path(path)
-
-    def _read() -> str:
-        if not resolved.is_file():
-            raise ToolError(f"找不到檔案:{resolved}")
-        text = resolved.read_text(encoding="utf-8", errors="replace")
-        if len(text) > MAX_READ_CHARS:
-            return text[:MAX_READ_CHARS] + f"\n...(已截斷,檔案共 {len(text)} 字元)"
-        return text
-
-    return await asyncio.to_thread(_read)
-
-
-async def list_dir(path: str) -> str:
-    resolved, _ = resolve_path(path)
-
-    def _list() -> str:
-        if not resolved.is_dir():
-            raise ToolError(f"找不到資料夾:{resolved}")
-        entries = sorted(resolved.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
-        lines = [f"{'📄' if e.is_file() else '📁'} {e.name}" for e in entries[:MAX_LIST_ENTRIES]]
-        if len(entries) > MAX_LIST_ENTRIES:
-            lines.append(f"...(還有 {len(entries) - MAX_LIST_ENTRIES} 項,已省略)")
-        return "\n".join(lines) or "(空資料夾)"
-
-    return await asyncio.to_thread(_list)
-
-
-async def write_file(path: str, content: str) -> str:
-    resolved, _ = resolve_path(path)
-
-    def _write() -> str:
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_text(content, encoding="utf-8")
-        return f"已寫入 {resolved}({len(content)} 字元)"
-
-    return await asyncio.to_thread(_write)
-
-
-async def run_shell(command: str, cwd: str | None = None) -> str:
-    resolved_cwd = resolve_path(cwd)[0] if cwd else _root()
-    try:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            cwd=str(resolved_cwd),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=SHELL_TIMEOUT_SECONDS)
-    except TimeoutError as exc:
-        raise ToolError(f"指令執行逾時({SHELL_TIMEOUT_SECONDS} 秒),已中止") from exc
-
-    output = stdout.decode("utf-8", errors="replace")
-    if len(output) > MAX_SHELL_OUTPUT_CHARS:
-        output = output[:MAX_SHELL_OUTPUT_CHARS] + f"\n...(輸出已截斷,共 {len(output)} 字元)"
-    return f"(exit code {proc.returncode})\n{output or '(無輸出)'}"
-
-
-TOOL_HANDLERS = {
-    "read_file": read_file,
-    "list_dir": list_dir,
-    "write_file": write_file,
-    "run_shell": run_shell,
-}
+    return True  # unknown/unrecognized tools default to requiring confirmation

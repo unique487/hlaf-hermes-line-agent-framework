@@ -1,6 +1,10 @@
-"""Tests for the desktop agent's file/shell tools and scope checks."""
+"""Tests for the desktop-agent path-scope/danger-classification logic.
 
-import sys
+Actual tool execution now happens inside the Claude Code CLI itself; this
+module only decides whether a tool call needs LINE confirmation, so these
+tests cover `resolve_path` and `is_dangerous` against Claude Code's built-in
+tool names (Bash/Write/Edit/MultiEdit/Read/Glob/Grep/LS).
+"""
 
 import pytest
 
@@ -27,43 +31,30 @@ def test_resolve_path_outside_root_is_out_of_scope(_root) -> None:
     assert resolved == outside.resolve()
 
 
-def test_is_dangerous_write_and_shell_always_true() -> None:
-    assert tools.is_dangerous("write_file", {"path": "a.txt"})
-    assert tools.is_dangerous("run_shell", {"command": "dir"})
+def test_is_dangerous_bash_write_edit_multiedit_always_true() -> None:
+    assert tools.is_dangerous("Bash", {"command": "dir"})
+    assert tools.is_dangerous("Write", {"file_path": "a.txt", "content": "x"})
+    assert tools.is_dangerous("Edit", {"file_path": "a.txt"})
+    assert tools.is_dangerous("MultiEdit", {"file_path": "a.txt"})
 
 
 def test_is_dangerous_read_depends_on_scope(_root) -> None:
-    assert not tools.is_dangerous("read_file", {"path": "in-scope.txt"})
-    assert tools.is_dangerous("read_file", {"path": str(_root.parent / "outside.txt")})
+    assert not tools.is_dangerous("Read", {"file_path": "in-scope.txt"})
+    assert tools.is_dangerous("Read", {"file_path": str(_root.parent / "outside.txt")})
 
 
-async def test_write_then_read_file_roundtrip(_root) -> None:
-    result = await tools.write_file("sub/note.txt", "hello world")
-    assert "已寫入" in result
-    content = await tools.read_file("sub/note.txt")
-    assert content == "hello world"
+def test_is_dangerous_ls_glob_grep_depend_on_scope(_root) -> None:
+    assert not tools.is_dangerous("LS", {"path": str(_root)})
+    assert tools.is_dangerous("LS", {"path": str(_root.parent)})
+    assert not tools.is_dangerous("Glob", {"path": str(_root), "pattern": "*.py"})
+    assert tools.is_dangerous("Grep", {"path": str(_root.parent), "pattern": "TODO"})
 
 
-async def test_read_file_missing_raises_tool_error(_root) -> None:
-    with pytest.raises(tools.ToolError):
-        await tools.read_file("missing.txt")
+def test_is_dangerous_scope_checked_tool_without_path_is_safe() -> None:
+    # No extractable path at all (e.g. a pattern-only Glob with no explicit
+    # dir) resolves relative to the desktop root, so it's treated as in-scope.
+    assert not tools.is_dangerous("Glob", {})
 
 
-async def test_list_dir_shows_entries(_root) -> None:
-    (_root / "a.txt").write_text("x", encoding="utf-8")
-    (_root / "sub").mkdir()
-    listing = await tools.list_dir(".")
-    assert "a.txt" in listing
-    assert "sub" in listing
-
-
-async def test_list_dir_missing_raises_tool_error(_root) -> None:
-    with pytest.raises(tools.ToolError):
-        await tools.list_dir("no-such-dir")
-
-
-async def test_run_shell_returns_output_and_exit_code(_root) -> None:
-    python = sys.executable
-    result = await tools.run_shell(f'"{python}" -c "print(1+1)"')
-    assert "(exit code 0)" in result
-    assert "2" in result
+def test_is_dangerous_unknown_tool_defaults_true() -> None:
+    assert tools.is_dangerous("delete_everything", {})

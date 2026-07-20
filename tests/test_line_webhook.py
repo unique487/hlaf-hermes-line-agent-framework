@@ -85,12 +85,12 @@ def test_first_contact_captures_admin_and_greets() -> None:
     assert not allowlist.is_allowed("U-stranger")
 
 
-def test_allowed_user_message_reaches_desktop_agent() -> None:
+def test_allowed_user_message_reaches_claude_code_agent() -> None:
     from app.services import allowlist
 
     allowlist.capture_first_admin("U-admin")
     body = _text_event_payload("U-admin", "你好 Hermes")
-    with patch("app.api.line_webhook.desktop_agent.handle_message", new=AsyncMock()) as handle:
+    with patch("app.api.line_webhook.claude_code_agent.handle_message", new=AsyncMock()) as handle:
         resp = client.post("/line/webhook", content=body, headers={"X-Line-Signature": _sign(body)})
     assert resp.status_code == 200
     handle.assert_awaited_once_with("U-admin", "reply-token-1", "你好 Hermes")
@@ -102,7 +102,7 @@ def test_non_allowlisted_user_is_ignored() -> None:
     allowlist.capture_first_admin("U-admin")
     body = _text_event_payload("U-stranger", "在嗎?")
     with (
-        patch("app.api.line_webhook.desktop_agent.handle_message", new=AsyncMock()) as handle,
+        patch("app.api.line_webhook.claude_code_agent.handle_message", new=AsyncMock()) as handle,
         patch("app.api.line_webhook.line_client.send_text", new=AsyncMock()) as send,
     ):
         resp = client.post("/line/webhook", content=body, headers={"X-Line-Signature": _sign(body)})
@@ -111,13 +111,13 @@ def test_non_allowlisted_user_is_ignored() -> None:
     send.assert_not_awaited()
 
 
-def test_reset_clears_desktop_agent_state() -> None:
+def test_reset_clears_claude_code_agent_state() -> None:
     from app.services import allowlist
 
     allowlist.capture_first_admin("U-admin")
     body = _text_event_payload("U-admin", "/reset")
     with (
-        patch("app.api.line_webhook.desktop_agent.reset_history") as reset,
+        patch("app.api.line_webhook.claude_code_agent.reset_history") as reset,
         patch("app.api.line_webhook.line_client.send_text", new=AsyncMock()) as send,
     ):
         resp = client.post("/line/webhook", content=body, headers={"X-Line-Signature": _sign(body)})
