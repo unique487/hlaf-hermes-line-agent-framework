@@ -21,7 +21,7 @@ Write-Host "🌐 啟動 ngrok 通道..." -ForegroundColor Cyan
 try {
     if ($Domain) {
         Write-Host "   Webhook 網址: https://$Domain/line/webhook" -ForegroundColor Green
-        ngrok http $Port --url $Domain
+        ngrok http $Port --domain $Domain
     } else {
         Write-Host "   (未指定固定網域,ngrok 會給隨機網址,記得去 LINE 後台更新 webhook)" -ForegroundColor Yellow
         ngrok http $Port
