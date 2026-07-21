@@ -35,7 +35,17 @@ class Settings(BaseSettings):
     # headless Claude Code CLI: `claude -p`) ---
     # Tool calls (Read/Glob/Grep/LS) targeting paths outside this root pause for
     # LINE confirmation; Bash/Write/Edit/MultiEdit always pause regardless of path.
-    desktop_root: str = r"G:\我的雲端硬碟\claude\LINE"
+    #
+    # 2026-07-22: moved from G:\我的雲端硬碟\claude\LINE (a Google-Drive mount)
+    # to a local C: path, same rationale as the sibling opencode group-bot's
+    # groupbot_admin_cwd move: the `claude -p` subprocess runs with cwd here
+    # and reads/writes files here, so keeping it on the cloud-drive mount
+    # means a transient G: stall (observed causing multi-minute hangs) can
+    # block the agent's file operations. The old root held only a
+    # line_uploads/ folder of past LINE image uploads (copied over,
+    # checksum-verified); nothing else lived there. The G: copy is kept as
+    # a backup, not deleted.
+    desktop_root: str = r"C:\Users\user\claude-line-desktop-root"
     progress_interval_seconds: int = 300
     confirm_timeout_seconds: int = 600
     # Path/command used to invoke the Claude Code CLI. Override with a full
