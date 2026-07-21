@@ -44,6 +44,23 @@ from app.services import conversation, line_client
 
 _RATE_LIMIT_MARKERS = ("429", "rate limit", "rate_limit", "quota", "too many requests")
 
+# NOTE: a reactive "restart opencode serve the moment one message's fallback
+# chain exhausts every rung" self-heal used to live here (added, then
+# removed, 2026-07-21). Cut because it caused a worse cascade than the
+# problem it was meant to fix: when several LINE messages (group + admin)
+# are in flight at once and one of them exhausts its chain, killing the
+# shared opencode serve process out from under the *other* still-in-flight
+# chains turns their would-have-succeeded rungs into instant
+# "server_unreachable" failures, which independently exhaust *their* chains
+# too - self-reinforcing, confirmed 2026-07-21 by log evidence of a single
+# trigger fanning out into a burst of "all rungs failed" across concurrent
+# messages within the same few seconds. Proactive restarts on a fixed timer
+# (see scripts/watchdog-opencode-serve.ps1 and the scheduled restart task)
+# don't have this problem since they don't correlate with "multiple
+# messages failing at once," but a failure-triggered restart does by
+# construction. If this gets revisited, it needs to check for zero
+# in-flight chains before restarting, not just a cooldown.
+
 _SILENT_RE = re.compile(
     r"""^[\s"'「」『』(（]*\(silent\)[\s"'「」『』)）.,。，!！]*$""",
     re.IGNORECASE,
@@ -120,6 +137,18 @@ def _extract_answer(parts: list[dict]) -> str | None:
     return "".join(texts)
 
 
+async def _abort_session(client: httpx.AsyncClient, session_id: str) -> None:
+    """Best-effort POST /session/{id}/abort to stop a still-running
+    generation and free its opencode-serve worker. Called on timeout
+    before the session is deleted (see _run_rung). Swallows all errors —
+    aborting is a cleanup nicety, never allowed to raise into the caller.
+    """
+    try:
+        await client.post(f"/session/{session_id}/abort", timeout=5)
+    except httpx.HTTPError:
+        pass
+
+
 async def _run_rung(
     client: httpx.AsyncClient,
     settings: Settings,
@@ -158,16 +187,27 @@ async def _run_rung(
             timeout=timeout_seconds,
         )
     except httpx.TimeoutException:
-        # Deliberately NOT calling POST /session/{id}/abort here. Measured
-        # 2026-07-21: aborting a still-in-flight generation was reliably
-        # followed by the *next several* rungs (fresh sessions, different
-        # models/providers) all returning an instant 0-token empty
-        # response for a few seconds, cascading the whole fallback chain
-        # into "all rungs failed" even though nothing was actually wrong
-        # with those other providers. Letting the timed-out session just
-        # get deleted (see `finally` below) without an explicit abort
-        # avoided the cascade in testing. If opencode serve's abort
-        # handling improves in a future version this can be revisited.
+        # Abort the still-in-flight generation so its opencode-serve worker
+        # is actually freed, THEN let `finally` delete the session.
+        #
+        # History (2026-07-21/22): this used to deliberately NOT abort,
+        # because on an older opencode version aborting seemed to make the
+        # next few rungs return instant empty responses (a "cascade").
+        # That trade-off turned out to be the real root cause of the
+        # multi-hour outages: a persistent `opencode serve` holds a fixed
+        # pool of workers ("Worker local total request limit reached
+        # (48/48)"), and a timed-out generation that is never aborted keeps
+        # occupying its worker indefinitely. On a slow-provider night the
+        # bot times out a lot, leaks a worker each time, and within tens of
+        # minutes every worker is stuck — at which point ALL new messages
+        # (group + admin) hang, even though /doc still returns 200 (so the
+        # liveness watchdog never notices). Confirmed by A/B: a
+        # seconds-old serve answers a trivial prompt fine; a ~15-min-old
+        # one under load hangs on the same prompt. Aborting frees the
+        # worker and is the actual fix; the existing
+        # groupbot_timeout_recovery_delay_seconds pause between rungs is
+        # kept as the guard against the old cascade symptom.
+        await _abort_session(client, session_id)
         logger.warning(f"model={model} timed out after {timeout_seconds}s")
         return None, "timeout"
     except httpx.HTTPError as exc:

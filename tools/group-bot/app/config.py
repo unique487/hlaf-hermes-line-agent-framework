@@ -148,12 +148,22 @@ class Settings(BaseSettings):
     # extra dead wait and that truncation risk. big-pickle stays in the
     # chain as a later fallback, just not first, for admin only — the group
     # bot's own chain/order is untouched.
+    # 2026-07-22: reliable-model-first order (same rationale as the group
+    # chain's GROUPBOT_MODEL_CHAIN in .env). The opencode-zen free rungs
+    # (deepseek-v4-flash-free, big-pickle) went down for hours overnight and
+    # produced zero successes — every call timed out for 45-180s while
+    # holding an opencode-serve worker, which saturated the worker pool and
+    # took the whole bot down. Putting the models that DID succeed tonight
+    # (nvidia deepseek-v4-flash, glm-5.2) first makes admin DMs actually
+    # complete and stops the worker starvation; the free rungs stay as
+    # fallback. Revert to free-first once opencode-zen recovers if cost
+    # matters more than latency.
     groupbot_admin_model_chain: str = (
+        "nvidia/deepseek-ai/deepseek-v4-flash,"
+        "nvidia/z-ai/glm-5.2,"
         "opencode/deepseek-v4-flash-free,"
         "opencode/big-pickle,"
-        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free,"
-        "nvidia/deepseek-ai/deepseek-v4-flash,"
-        "nvidia/z-ai/glm-5.2"
+        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
     )
     # Timeout for the admin chain's first rung. Unlike the group bot's
     # rung-0 (which only ever needs to produce a short chat reply and can
@@ -177,11 +187,24 @@ class Settings(BaseSettings):
     # raw HTTP call: same agent, same everything, only the directory
     # differed, and only the heavy directory failed.
     #
-    # Fix: a small dedicated folder with nothing in it but
-    # OPENCODE_GROUPBOT_STATUS.md (copied there too), so the admin agent
-    # still has context on this whole system without opencode trying to
-    # index someone else's unrelated codebase.
-    groupbot_admin_cwd: str = r"G:\我的雲端硬碟\opencode\LINE-admin"
+    # Fix: a small dedicated folder with nothing in it but a few small
+    # context .md files, so the admin agent still has context on this whole
+    # system without opencode trying to index someone else's unrelated
+    # codebase.
+    #
+    # 2026-07-22: moved to a local C: path. The overnight outages were
+    # NOT caused by the directory location (proven by A/B: symptoms
+    # persisted identically whether this pointed at C: or G:; a fresh
+    # opencode serve answers fine from the C: path). The real cause was an
+    # opencode-serve worker leak (timed-out generations never aborted ->
+    # workers exhausted -> everything hangs), now fixed by aborting on
+    # timeout in _run_rung. With that understood, keeping this on C: is
+    # strictly better: the folder is a handful of small .md files with no
+    # git/.venv, so there's no reason to keep it on the Google-Drive mount
+    # where a transient G: stall could add latency. Content was
+    # re-synced from G:\我的雲端硬碟\opencode\LINE-admin and checksum-verified
+    # before switching; that G: copy is kept as a backup, not deleted.
+    groupbot_admin_cwd: str = r"C:\Users\user\opencode-admin-workdir"
     # Admin tasks (actually running tools) can run far longer than a plain
     # Q&A reply — give much more headroom than the group agent's 45s.
     groupbot_admin_model_timeout_seconds: int = 180
