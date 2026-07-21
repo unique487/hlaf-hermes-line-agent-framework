@@ -7,6 +7,9 @@ from app.logger import logger
 from app.services.task_state import CONFIRM_NO, CONFIRM_YES
 
 LINE_API_BASE = "https://api.line.me/v2/bot"
+# Binary message content (images/video/audio/files) is served from a
+# separate host than the rest of the Messaging API.
+LINE_DATA_API_BASE = "https://api-data.line.me/v2/bot"
 # LINE text messages are capped at 5000 characters.
 MAX_TEXT_LEN = 5000
 # LINE confirm template: text max 240 chars, button labels max 20 chars.
@@ -57,6 +60,21 @@ async def send_text(reply_token: str, user_id: str, text: str) -> None:
     """Reply first; if the token is no longer valid, fall back to push."""
     if not await reply_text(reply_token, text):
         await push_text(user_id, text)
+
+
+async def get_message_content(message_id: str) -> tuple[bytes, str]:
+    """Download a message's binary content (e.g. an image). Raises on failure.
+
+    Returns (content_bytes, content_type) — content_type drives the saved
+    file's extension since LINE doesn't expose an original filename.
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{LINE_DATA_API_BASE}/message/{message_id}/content",
+            headers={"Authorization": f"Bearer {get_settings().line_channel_access_token}"},
+        )
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
 
 
 async def push_confirm(user_id: str, description: str) -> bool:

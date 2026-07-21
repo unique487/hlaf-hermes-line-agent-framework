@@ -134,6 +134,18 @@ def _subprocess_env(settings) -> dict[str, str]:
     env = dict(os.environ)
     env["CLAUDE_INTERNAL_BASE_URL"] = settings.internal_base_url
     env["CLAUDE_DESKTOP_ROOT"] = settings.desktop_root
+    # PreToolUse hook (config/claude_hooks.json) needs this repo's own root to
+    # find scripts/claude_confirm_hook.py. It can't use `$CLAUDE_PROJECT_DIR`
+    # for that: since `claude -p` runs with cwd=desktop_root (see
+    # `_run_claude`), that variable resolves to the user's workspace, not
+    # this repo — and on Windows, embedding the (Chinese-containing) GDrive
+    # path as literal text in the hook's shell command line also gets
+    # mangled by the system's non-UTF-8 codepage. Passed as a real env var
+    # instead, so the hook reads it via `os.environ` (Unicode-safe) rather
+    # than via shell text substitution.
+    env["CLAUDE_HOOKS_REPO_ROOT"] = str(
+        Path(__file__).resolve().parent.parent.parent
+    )
     return env
 
 
@@ -155,6 +167,14 @@ async def _run_claude(user_id: str, task: TaskState, text: str) -> str:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=_subprocess_env(settings),
+            # `stream-json` events can embed large content in a single NDJSON
+            # line (e.g. a `tool_result` block for a `Read` on an image) —
+            # comfortably past asyncio's default 64 KiB StreamReader limit,
+            # which raises `ValueError: Separator is not found, and chunk
+            # exceed the limit` and crashes the whole task with no reply
+            # ever sent to the user. 10 MiB covers any image this bot will
+            # realistically be asked to look at.
+            limit=10 * 1024 * 1024,
         )
     except FileNotFoundError:
         logger.error(f"claude CLI not found at '{settings.claude_cli_path}'")
@@ -171,6 +191,17 @@ async def _run_claude(user_id: str, task: TaskState, text: str) -> str:
         proc.kill()
         await proc.wait()
         return "任務執行逾時,已自動中止。"
+    except Exception:
+        # Any other failure reading/parsing the subprocess stream (crashed
+        # process, malformed output, etc.) — log it, but still answer the
+        # user rather than leaving them with silence forever (this is what
+        # actually happened before: an uncaught ValueError here killed the
+        # background task with no LINE reply at all).
+        logger.exception(f"claude subprocess failed for user {user_id[:8]}…")
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+        return "處理過程發生錯誤,請稍後再試一次。"
 
     return final_answer
 
