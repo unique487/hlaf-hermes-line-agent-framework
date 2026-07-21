@@ -1,0 +1,33 @@
+﻿# ⚠️ 這是 C:\Users\user\claude-agent-bootstrap.ps1 的參考副本,只為了讓這份腳本
+# 也進版控、方便日後對照;實際生效的是 C:\ 那份,改動這個 repo 裡的檔案不會
+# 自動同步過去,兩邊要手動保持一致。
+#
+# 常駐在 C:\(本機磁碟,開機立刻可用),負責等 G:\ 雲端硬碟就緒後,
+# 再去呼叫真正放在 G:\ 底下 repo 裡的啟動腳本。
+# Windows 工作排程器 ClaudeLineAgentAutoStart 直接執行的就是這支,
+# 不能讓排程任務的 Action 直接指到 G:\ 上的檔案 --
+# 開機當下 G:\ 可能還沒掛載,powershell.exe -File 連打開那個檔案都會失敗,
+# 連檔案裡面自己的等待邏輯都跑不到。
+
+$RealScript = "G:\我的雲端硬碟\claude\HLAF-Hermes Line Agent Framework\.claude\worktrees\hermes-agent-official-account-833679\scripts\start-claude-agent-background.ps1"
+$BootLog = "C:\Users\user\claude-agent-boot.log"
+
+function Write-BootLog($msg) {
+    "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') [bootstrap] $msg" | Out-File -FilePath $BootLog -Append -Encoding UTF8
+}
+
+Write-BootLog "bootstrap started, waiting for $RealScript"
+
+$waited = 0
+while (-not (Test-Path $RealScript) -and $waited -lt 180) {
+    Start-Sleep -Seconds 5
+    $waited += 5
+}
+
+if (-not (Test-Path $RealScript)) {
+    Write-BootLog "ABORT: real script still not accessible after ${waited}s — G: 雲端硬碟可能沒掛載成功"
+    exit 1
+}
+
+Write-BootLog "real script found after ${waited}s, handing off"
+& $RealScript
