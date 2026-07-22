@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from app.config import get_settings
-from app.services import opencode_agent
+from app.services import conversation, opencode_agent
 
 
 # --------------------------------------------------------------------------
@@ -76,9 +76,28 @@ def test_build_prompt_with_mention_appends_instruction() -> None:
     assert "不要輸出 (silent)" in prompt
 
 
+def test_build_prompt_with_reply_to_bot_appends_instruction() -> None:
+    prompt = opencode_agent.build_prompt([], "使用者A", "還沒好嗎", is_reply_to_bot=True)
+    assert "不要輸出 (silent)" in prompt
+    assert "回覆" in prompt
+
+
 # --------------------------------------------------------------------------
-# handle_message: @-mention overrides the (silent) filter
+# handle_message: @-mention / reply-to-bot override the (silent) filter,
+# and a real answer gets the "{display name}老師好," politeness prefix.
 # --------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_conversation_state() -> None:
+    conversation.reset("C-group")
+
+
+def _mock_display_name(name: str | None = "陳大文"):
+    return patch(
+        "app.services.opencode_agent.line_client.get_group_member_display_name",
+        new=AsyncMock(return_value=name),
+    )
 
 
 async def test_mentioned_message_falls_back_to_generic_reply_when_model_says_silent() -> None:
@@ -86,12 +105,14 @@ async def test_mentioned_message_falls_back_to_generic_reply_when_model_says_sil
         "app.services.opencode_agent.run_model_chain",
         new=AsyncMock(return_value=("(silent)", "opencode/big-pickle")),
     ), patch(
-        "app.services.opencode_agent.line_client.send_text", new=AsyncMock()
-    ) as send_text:
+        "app.services.opencode_agent.line_client.send_text", new=AsyncMock(return_value=[])
+    ) as send_text, _mock_display_name("陳大文"):
         await opencode_agent.handle_message(
             "C-group", "U-1", "reply-token", "@木木昌至秦 哈囉", was_mentioned=True
         )
-    send_text.assert_awaited_once_with("reply-token", "C-group", opencode_agent._MENTION_FALLBACK_REPLY)
+    send_text.assert_awaited_once_with(
+        "reply-token", "C-group", f"陳大文老師好,{opencode_agent._MENTION_FALLBACK_REPLY}"
+    )
 
 
 async def test_unmentioned_silent_answer_is_still_suppressed() -> None:
@@ -99,7 +120,7 @@ async def test_unmentioned_silent_answer_is_still_suppressed() -> None:
         "app.services.opencode_agent.run_model_chain",
         new=AsyncMock(return_value=("(silent)", "opencode/big-pickle")),
     ), patch(
-        "app.services.opencode_agent.line_client.send_text", new=AsyncMock()
+        "app.services.opencode_agent.line_client.send_text", new=AsyncMock(return_value=[])
     ) as send_text:
         await opencode_agent.handle_message("C-group", "U-1", "reply-token", "哈哈哈", was_mentioned=False)
     send_text.assert_not_awaited()
@@ -110,12 +131,72 @@ async def test_mentioned_message_with_real_answer_is_sent_as_is() -> None:
         "app.services.opencode_agent.run_model_chain",
         new=AsyncMock(return_value=("這是總務處的回覆", "opencode/big-pickle")),
     ), patch(
-        "app.services.opencode_agent.line_client.send_text", new=AsyncMock()
-    ) as send_text:
+        "app.services.opencode_agent.line_client.send_text", new=AsyncMock(return_value=[])
+    ) as send_text, _mock_display_name("陳大文"):
+        await opencode_agent.handle_message(
+            "C-group", "U-1", "reply-token", "@木木昌至秦 馬桶不通", was_mentioned=True
+        )
+    send_text.assert_awaited_once_with("reply-token", "C-group", "陳大文老師好,這是總務處的回覆")
+
+
+async def test_reply_to_bot_message_overrides_silent_filter_like_a_mention() -> None:
+    """A swipe-to-reply quote of the bot's own message must get a real
+    answer just like an @-mention, even though there's no @-mention token
+    in the text at all."""
+    with patch(
+        "app.services.opencode_agent.run_model_chain",
+        new=AsyncMock(return_value=("(silent)", "opencode/big-pickle")),
+    ), patch(
+        "app.services.opencode_agent.line_client.send_text", new=AsyncMock(return_value=[])
+    ) as send_text, _mock_display_name("陳大文"):
+        await opencode_agent.handle_message(
+            "C-group", "U-1", "reply-token", "還沒好嗎", was_mentioned=False, is_reply_to_bot=True
+        )
+    send_text.assert_awaited_once_with(
+        "reply-token", "C-group", f"陳大文老師好,{opencode_agent._MENTION_FALLBACK_REPLY}"
+    )
+
+
+async def test_display_name_lookup_failure_sends_answer_without_greeting() -> None:
+    with patch(
+        "app.services.opencode_agent.run_model_chain",
+        new=AsyncMock(return_value=("這是總務處的回覆", "opencode/big-pickle")),
+    ), patch(
+        "app.services.opencode_agent.line_client.send_text", new=AsyncMock(return_value=[])
+    ) as send_text, _mock_display_name(None):
         await opencode_agent.handle_message(
             "C-group", "U-1", "reply-token", "@木木昌至秦 馬桶不通", was_mentioned=True
         )
     send_text.assert_awaited_once_with("reply-token", "C-group", "這是總務處的回覆")
+
+
+async def test_display_name_is_cached_and_looked_up_only_once() -> None:
+    with patch(
+        "app.services.opencode_agent.run_model_chain",
+        new=AsyncMock(return_value=("回覆", "opencode/big-pickle")),
+    ), patch(
+        "app.services.opencode_agent.line_client.send_text", new=AsyncMock(return_value=[])
+    ), _mock_display_name("陳大文") as get_name:
+        await opencode_agent.handle_message(
+            "C-group", "U-1", "reply-token", "@木木昌至秦 第一句", was_mentioned=True
+        )
+        await opencode_agent.handle_message(
+            "C-group", "U-1", "reply-token-2", "@木木昌至秦 第二句", was_mentioned=True
+        )
+    get_name.assert_awaited_once_with("C-group", "U-1")
+
+
+async def test_sent_message_ids_are_recorded_for_reply_to_bot_detection() -> None:
+    with patch(
+        "app.services.opencode_agent.run_model_chain",
+        new=AsyncMock(return_value=("這是總務處的回覆", "opencode/big-pickle")),
+    ), patch(
+        "app.services.opencode_agent.line_client.send_text", new=AsyncMock(return_value=["msg-123"])
+    ), _mock_display_name("陳大文"):
+        await opencode_agent.handle_message(
+            "C-group", "U-1", "reply-token", "@木木昌至秦 馬桶不通", was_mentioned=True
+        )
+    assert conversation.is_reply_to_bot("C-group", "msg-123") is True
 
 
 # --------------------------------------------------------------------------

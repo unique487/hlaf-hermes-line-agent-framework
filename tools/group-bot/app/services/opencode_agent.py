@@ -85,6 +85,7 @@ def build_prompt(
     latest_text: str,
     *,
     was_mentioned: bool = False,
+    is_reply_to_bot: bool = False,
 ) -> str:
     """Assemble the "context + latest message" user prompt.
 
@@ -92,8 +93,12 @@ def build_prompt(
     definition — this is only the per-turn payload. was_mentioned=True
     means the group's LINE @-mention on the latest message targeted the
     bot itself (not @all — see app/api/line_webhook.py, which never
-    dispatches @all at all) and tells the model to answer for real
-    instead of applying its usual topic-relevance (silent) filter.
+    dispatches @all at all); is_reply_to_bot=True means the sender used
+    LINE's swipe-to-reply to quote a message the bot previously sent (see
+    app/services/conversation.py's is_reply_to_bot). Either way the model
+    is told to answer for real instead of applying its usual
+    topic-relevance (silent) filter — both are the sender directly
+    addressing the bot, just via a different LINE affordance.
     """
     if history:
         context_lines = "\n".join(f"[{label}]: {text}" for label, text in history)
@@ -105,10 +110,15 @@ def build_prompt(
         "最新訊息(請針對這一則回覆):\n"
         f"[{latest_label}]: {latest_text}"
     )
-    if was_mentioned:
+    if was_mentioned or is_reply_to_bot:
+        reason = (
+            "有人直接 @ 你本人,不是廣播 @所有人"
+            if was_mentioned
+            else "有人直接回覆(swipe-to-reply)你之前傳的訊息"
+        )
         prompt += (
-            "\n\n(提示:這則訊息裡有人直接 @ 你本人,不是廣播 @所有人。"
-            "既然被直接提及,請正常回覆、不要輸出 (silent),就算內容不完全"
+            f"\n\n(提示:這則訊息{reason}。"
+            "既然是直接對你說話,請正常回覆、不要輸出 (silent),就算內容不完全"
             "屬於總務處業務範圍,也請盡量給出有幫助的回應,或告知使用者"
             "你能協助的範圍與正確窗口。)"
         )
@@ -310,8 +320,30 @@ _MENTION_FALLBACK_REPLY = (
 )
 
 
+async def _with_greeting(group_id: str, user_id: str, answer: str) -> str:
+    """Prefix a group reply with "{顯示名稱}老師好," for politeness. The
+    display name is looked up once per (group, user) via the LINE group
+    member profile API and cached (see app/services/conversation.py); if
+    the lookup fails (unknown user, API error, network issue) the answer
+    is sent as-is rather than blocking the reply on a nonessential lookup.
+    """
+    display_name = conversation.get_display_name(group_id, user_id)
+    if display_name is None:
+        display_name = await line_client.get_group_member_display_name(group_id, user_id)
+        if display_name:
+            conversation.cache_display_name(group_id, user_id, display_name)
+    if not display_name:
+        return answer
+    return f"{display_name}老師好,{answer}"
+
+
 async def handle_message(
-    group_id: str, user_id: str, reply_token: str, text: str, was_mentioned: bool = False
+    group_id: str,
+    user_id: str,
+    reply_token: str,
+    text: str,
+    was_mentioned: bool = False,
+    is_reply_to_bot: bool = False,
 ) -> None:
     """Single entry point wired up by the LINE webhook.
 
@@ -319,34 +351,44 @@ async def handle_message(
     fallback chain, and — unless the model says `(silent)` / all rungs
     failed — sends the reply (reply-token first, push fallback) and
     records the bot's own reply into the context too. was_mentioned=True
-    (the bot itself was @-tagged) overrides the (silent) topic filter: a
-    direct mention always gets a real reply, falling back to a generic
-    "that's outside 總務處 scope" message if the model still said
-    (silent) despite the prompt instruction not to.
+    (the bot itself was @-tagged) or is_reply_to_bot=True (a swipe-to-reply
+    quote of a message the bot sent — see
+    app/services/conversation.py:is_reply_to_bot) overrides the (silent)
+    topic filter: either way the sender is directly addressing the bot, so
+    it always gets a real reply, falling back to a generic "that's outside
+    總務處 scope" message if the model still said (silent) despite the
+    prompt instruction not to. Real replies are prefixed with the sender's
+    LINE display name as a greeting (see _with_greeting), and the sent
+    message's LINE-assigned ID is remembered so a later reply to *this*
+    message is recognised as targeting the bot too.
     """
     label = conversation.add_user_message(group_id, user_id, text)
     history = conversation.history_excluding_last(group_id)
-    prompt = build_prompt(history, label, text, was_mentioned=was_mentioned)
+    force_reply = was_mentioned or is_reply_to_bot
+    prompt = build_prompt(history, label, text, was_mentioned=was_mentioned, is_reply_to_bot=is_reply_to_bot)
 
     answer, model_used = await run_model_chain(prompt)
 
     if answer is None:
-        if was_mentioned:
-            logger.error(f"group={group_id} @-mentioned but all model rungs failed")
+        if force_reply:
+            logger.error(f"group={group_id} directly addressed but all model rungs failed")
         else:
             logger.info(f"group={group_id} model_used={model_used} all rungs failed, staying silent")
         return
 
     if should_suppress(answer):
-        if not was_mentioned:
+        if not force_reply:
             logger.info(f"group={group_id} model={model_used} suppressed reply (silent/empty)")
             return
-        logger.info(f"group={group_id} model={model_used} said (silent) despite @-mention; using fallback")
+        logger.info(f"group={group_id} model={model_used} said (silent) despite direct address; using fallback")
         answer = _MENTION_FALLBACK_REPLY
 
     assert answer is not None  # should_suppress already filtered None out
+    answer = await _with_greeting(group_id, user_id, answer)
     conversation.add_bot_message(group_id, answer)
-    await line_client.send_text(reply_token, group_id, answer)
+    sent_ids = await line_client.send_text(reply_token, group_id, answer)
+    for message_id in sent_ids:
+        conversation.record_bot_message_id(group_id, message_id)
 
 
 # --- On-demand MCP-enabled serve for admin DMs (2026-07-22) ---

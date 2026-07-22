@@ -6,7 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from app.config import get_settings
 from app.logger import logger
-from app.services import allowlist, opencode_agent
+from app.services import allowlist, conversation, opencode_agent
 from app.utils.line_signature import verify_line_signature
 
 router = APIRouter(tags=["line"])
@@ -68,8 +68,21 @@ async def line_webhook(
                 continue
             was_mentioned = any(m.get("isSelf") for m in mentionees)
 
+            # A LINE swipe-to-reply quote of one of the bot's own past
+            # messages should always get a real reply too, same as an
+            # @-mention — the sender is explicitly addressing the bot even
+            # though there's no @-mention token in the text.
+            quoted_message_id = message.get("quotedMessageId")
+            is_reply_to_bot = conversation.is_reply_to_bot(group_id, quoted_message_id)
+
             background_tasks.add_task(
-                opencode_agent.handle_message, group_id, user_id, reply_token, text, was_mentioned
+                opencode_agent.handle_message,
+                group_id,
+                user_id,
+                reply_token,
+                text,
+                was_mentioned,
+                is_reply_to_bot,
             )
         else:  # source_type == "user" — 1:1 DM
             user_id = source.get("userId", "")

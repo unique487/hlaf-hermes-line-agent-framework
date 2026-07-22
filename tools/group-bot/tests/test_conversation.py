@@ -53,3 +53,41 @@ def test_rolling_window_caps_at_configured_size(monkeypatch) -> None:
     history = conversation.history_excluding_last("G1")
     assert len(history) == 2
     assert history == [("使用者A", "msg2"), ("使用者A", "msg3")]
+
+
+def test_display_name_is_unset_until_cached() -> None:
+    _reset("G1")
+    assert conversation.get_display_name("G1", "U-a") is None
+    conversation.cache_display_name("G1", "U-a", "陳大文")
+    assert conversation.get_display_name("G1", "U-a") == "陳大文"
+
+
+def test_display_names_are_independent_per_group() -> None:
+    _reset("G1")
+    _reset("G2")
+    conversation.cache_display_name("G1", "U-a", "陳大文")
+    assert conversation.get_display_name("G2", "U-a") is None
+
+
+def test_bot_message_id_is_recognised_as_reply_to_bot() -> None:
+    _reset("G1")
+    assert conversation.is_reply_to_bot("G1", "msg-1") is False
+    conversation.record_bot_message_id("G1", "msg-1")
+    assert conversation.is_reply_to_bot("G1", "msg-1") is True
+
+
+def test_is_reply_to_bot_false_for_unknown_or_missing_id() -> None:
+    _reset("G1")
+    conversation.record_bot_message_id("G1", "msg-1")
+    assert conversation.is_reply_to_bot("G1", "msg-999") is False
+    assert conversation.is_reply_to_bot("G1", None) is False
+
+
+def test_bot_message_id_history_is_bounded(monkeypatch) -> None:
+    monkeypatch.setattr(conversation, "_BOT_MESSAGE_ID_HISTORY", 3)
+    _reset("G1")
+    for i in range(4):
+        conversation.record_bot_message_id("G1", f"msg-{i}")
+    # maxlen=3: the oldest ID (msg-0) has been evicted, the rest remain.
+    assert conversation.is_reply_to_bot("G1", "msg-0") is False
+    assert conversation.is_reply_to_bot("G1", "msg-3") is True

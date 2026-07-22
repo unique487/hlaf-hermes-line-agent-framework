@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.main import app
+from app.services import conversation
 
 CHANNEL_SECRET = "test-channel-secret"
 ALLOWED_GROUP = "C-allowed-group"
@@ -34,10 +35,18 @@ def _sign(body: bytes) -> str:
     return base64.b64encode(digest).decode()
 
 
-def _group_text_event(group_id: str, user_id: str, text: str, mention: dict | None = None) -> bytes:
+def _group_text_event(
+    group_id: str,
+    user_id: str,
+    text: str,
+    mention: dict | None = None,
+    quoted_message_id: str | None = None,
+) -> bytes:
     message: dict = {"type": "text", "text": text}
     if mention is not None:
         message["mention"] = mention
+    if quoted_message_id is not None:
+        message["quotedMessageId"] = quoted_message_id
     return json.dumps(
         {
             "events": [
@@ -92,7 +101,7 @@ def test_allowed_group_message_dispatches_to_opencode_agent() -> None:
     ) as handle:
         resp = client.post("/line/webhook", content=body, headers={"X-Line-Signature": _sign(body)})
     assert resp.status_code == 200
-    handle.assert_awaited_once_with(ALLOWED_GROUP, "U-1", "reply-token-1", "三樓廁所馬桶不通", False)
+    handle.assert_awaited_once_with(ALLOWED_GROUP, "U-1", "reply-token-1", "三樓廁所馬桶不通", False, False)
 
 
 def test_self_mentioned_group_message_dispatches_with_was_mentioned_true() -> None:
@@ -103,7 +112,7 @@ def test_self_mentioned_group_message_dispatches_with_was_mentioned_true() -> No
     ) as handle:
         resp = client.post("/line/webhook", content=body, headers={"X-Line-Signature": _sign(body)})
     assert resp.status_code == 200
-    handle.assert_awaited_once_with(ALLOWED_GROUP, "U-1", "reply-token-1", "@木木昌至秦 在嗎", True)
+    handle.assert_awaited_once_with(ALLOWED_GROUP, "U-1", "reply-token-1", "@木木昌至秦 在嗎", True, False)
 
 
 def test_mention_of_other_user_does_not_set_was_mentioned() -> None:
@@ -114,7 +123,30 @@ def test_mention_of_other_user_does_not_set_was_mentioned() -> None:
     ) as handle:
         resp = client.post("/line/webhook", content=body, headers={"X-Line-Signature": _sign(body)})
     assert resp.status_code == 200
-    handle.assert_awaited_once_with(ALLOWED_GROUP, "U-1", "reply-token-1", "@小明 在嗎", False)
+    handle.assert_awaited_once_with(ALLOWED_GROUP, "U-1", "reply-token-1", "@小明 在嗎", False, False)
+
+
+def test_reply_to_bots_own_message_dispatches_with_is_reply_to_bot_true() -> None:
+    conversation.reset(ALLOWED_GROUP)
+    conversation.record_bot_message_id(ALLOWED_GROUP, "bot-msg-1")
+    body = _group_text_event(ALLOWED_GROUP, "U-1", "還沒好嗎", quoted_message_id="bot-msg-1")
+    with patch(
+        "app.api.line_webhook.opencode_agent.handle_message", new=AsyncMock()
+    ) as handle:
+        resp = client.post("/line/webhook", content=body, headers={"X-Line-Signature": _sign(body)})
+    assert resp.status_code == 200
+    handle.assert_awaited_once_with(ALLOWED_GROUP, "U-1", "reply-token-1", "還沒好嗎", False, True)
+
+
+def test_reply_to_a_non_bot_message_does_not_set_is_reply_to_bot() -> None:
+    conversation.reset(ALLOWED_GROUP)
+    body = _group_text_event(ALLOWED_GROUP, "U-1", "同意", quoted_message_id="some-other-users-msg")
+    with patch(
+        "app.api.line_webhook.opencode_agent.handle_message", new=AsyncMock()
+    ) as handle:
+        resp = client.post("/line/webhook", content=body, headers={"X-Line-Signature": _sign(body)})
+    assert resp.status_code == 200
+    handle.assert_awaited_once_with(ALLOWED_GROUP, "U-1", "reply-token-1", "同意", False, False)
 
 
 def test_at_all_broadcast_is_never_dispatched() -> None:
