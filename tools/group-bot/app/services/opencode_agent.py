@@ -44,7 +44,23 @@ from app.config import Settings, get_settings
 from app.logger import logger
 from app.services import conversation, line_client
 
-_RATE_LIMIT_MARKERS = ("429", "rate limit", "rate_limit", "quota", "too many requests")
+# 2026-07-22: added the "worker local total request limit" family after
+# Opus-diagnosed log evidence (173 occurrences) showed NVIDIA's own
+# concurrency-cap error passing through ai-sdk unmarked by any of the
+# original markers below, so it was falling into the generic "no_answer"
+# bucket instead of being recognised as upstream rate-limiting — same
+# underlying condition (provider says "too much traffic, try later"), just
+# NVIDIA's own wording for it instead of a standard 429/quota message.
+_RATE_LIMIT_MARKERS = (
+    "429",
+    "rate limit",
+    "rate_limit",
+    "quota",
+    "too many requests",
+    "worker local total request limit",
+    "resourceexhausted",
+    "resource_exhausted",
+)
 
 # NOTE: a reactive "restart opencode serve the moment one message's fallback
 # chain exhausts every rung" self-heal used to live here (added, then
