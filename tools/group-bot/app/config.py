@@ -86,17 +86,18 @@ class Settings(BaseSettings):
     # (provider id "opencode"), not this .env — set via
     # `opencode auth login -p opencode`.
     # 2026-07-22: this default is now dead code in practice — see
-    # GROUPBOT_MODEL_CHAIN in .env, which overrides it with NVIDIA-direct
-    # models first after a live incident where the free opencode-zen rungs
-    # were rate-limited/timing out on nearly every message. Kept in sync
-    # with that override as the fallback default in case the .env line is
-    # ever removed.
+    # GROUPBOT_MODEL_CHAIN in .env for the live value and the full history
+    # of why it looks like this (NVIDIA direct first, then OpenRouter's
+    # nemotron rung promoted to rung 2 after finding NVIDIA's direct API
+    # enforces a shared per-account concurrency cap that every nvidia/*
+    # rung competes for — including the now-removed nvidia/z-ai/glm-5.2).
+    # Kept in sync with that override as the fallback default in case the
+    # .env line is ever removed.
     groupbot_model_chain: str = (
         "nvidia/deepseek-ai/deepseek-v4-flash,"
+        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free,"
         "opencode/deepseek-v4-flash-free,"
-        "opencode/big-pickle,"
-        "nvidia/z-ai/glm-5.2,"
-        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+        "opencode/big-pickle"
     )
 
     # Per-rung timeout in seconds, for every rung *except* the first (see
@@ -153,18 +154,17 @@ class Settings(BaseSettings):
     # 2026-07-22 08:xx: free-first (the overnight outage turned out to be an
     # opencode-serve worker-pool leak, not the free models themselves —
     # fixed by aborting on timeout).
-    # 2026-07-22 (later same day): reordered again — free opencode-zen
-    # rungs were rate-limited/timing out on nearly every message, so this
-    # default is now dead code in practice (see GROUPBOT_ADMIN_MODEL_CHAIN
-    # in .env, which overrides it with NVIDIA-direct models first). Kept in
-    # sync with that override as the fallback default in case the .env
-    # line is ever removed.
+    # 2026-07-22 (later same day, twice): reordered again — this default is
+    # now dead code in practice, see GROUPBOT_ADMIN_MODEL_CHAIN in .env for
+    # the live value and full history (same NVIDIA-account-concurrency-cap
+    # finding as groupbot_model_chain above applies identically here).
+    # Kept in sync with that override as the fallback default in case the
+    # .env line is ever removed.
     groupbot_admin_model_chain: str = (
         "nvidia/deepseek-ai/deepseek-v4-flash,"
+        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free,"
         "opencode/deepseek-v4-flash-free,"
-        "opencode/big-pickle,"
-        "nvidia/z-ai/glm-5.2,"
-        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+        "opencode/big-pickle"
     )
     # Timeout for the admin chain's first rung. Unlike the group bot's
     # rung-0 (which only ever needs to produce a short chat reply and can
