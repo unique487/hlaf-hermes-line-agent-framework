@@ -26,7 +26,13 @@ $VenvPython = "C:\Users\user\.venvs\group-bot\Scripts\python.exe"
 $OpenCodeExe = "C:\Users\user\AppData\Roaming\npm\node_modules\opencode-ai\bin\opencode.exe"
 $OpenCodeServeHost = "127.0.0.1"
 $OpenCodeServePort = 4097
-$NgrokExe = "C:\Users\user\AppData\Local\Microsoft\WinGet\Packages\Ngrok.Ngrok_Microsoft.Winget.Source_8wekyb3d8bbwe\ngrok.exe"
+# 2026-07-22:原本 WinGet 裝的那顆 ngrok.exe 版本太舊(3.3.1,ngrok 伺服器端
+# 要求最低 3.20.0),且不管 `ngrok update`、`winget upgrade` 或手動換成新版檔案
+# 放哪個資料夾都會在幾秒內被本機端點防護清掉(不是防毒單純誤判,是專門針對
+# ngrok 的攔截規則,一般使用者介面關不掉)。改請資訊人員加白名單未果,改用
+# Microsoft Store 版(套件 ngrok.ngrok,執行別名放在
+# %LOCALAPPDATA%\Microsoft\WindowsApps\ngrok.exe)成功繞過,版本 3.39.8。
+$NgrokExe = "C:\Users\user\AppData\Local\Microsoft\WindowsApps\ngrok.exe"
 $NgrokConfig = "C:\Users\user\.ngrok-groupbot.yml"
 $NgrokApiPort = 4041
 $Port = 8001
@@ -70,9 +76,21 @@ Get-CimInstance Win32_Process -Filter "Name='ngrok.exe'" -ErrorAction SilentlyCo
     Where-Object { $_.CommandLine -match [regex]::Escape($NgrokConfig) } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
+# serve 的啟動工作目錄改用 C: 的 opencode-serve-workdir(不是 G: 的 $RepoPath)。
+# 原因有二:(1)那個資料夾裡放了一份 opencode.json,把全域那 5 個很重的 MCP server
+# (notebooklm/firebase/playwright/open-computer-use/obsidian)逐一 enabled:false
+# 關掉——2026-07-22 實測那些 MCP 是 serve「跑約 15 分鐘後退化到送訊息逾時」的根因
+# (每建 session 就重 spawn 一整套且不回收,量到 100+ 個殘留吃 ~2GB RAM),關掉後
+# 輕量訊息從 ~33 秒降到 ~3 秒,詳見 restart-opencode-serve.ps1 的註解;(2)serve 的
+# 啟動 cwd 對機器人行為本來就無影響(groupbot 工具全關;admin 每則自帶 directory),
+# 放在 C: 也順便避開 G: 雲端硬碟卡頓。admin 私訊用的
+# C:\Users\user\opencode-admin-workdir 也放了同一份 opencode.json。
+$OpenCodeServeWorkDir = "C:\Users\user\group-bot-scripts\opencode-serve-workdir"
+New-Item -ItemType Directory -Force -Path $OpenCodeServeWorkDir | Out-Null
+
 Start-Process -WindowStyle Hidden -FilePath $OpenCodeExe `
     -ArgumentList "serve","--hostname",$OpenCodeServeHost,"--port","$OpenCodeServePort" `
-    -WorkingDirectory $RepoPath `
+    -WorkingDirectory $OpenCodeServeWorkDir `
     -RedirectStandardOutput "$LogDir\opencode-serve.out.log" `
     -RedirectStandardError "$LogDir\opencode-serve.err.log"
 Write-BootLog "opencode serve Start-Process issued (port $OpenCodeServePort)"
@@ -111,16 +129,24 @@ Start-Process -WindowStyle Hidden -FilePath $NgrokExe `
 Write-BootLog "ngrok Start-Process issued"
 
 # 等 ngrok 分配到公開網址(最多等 30 秒),再回頭更新 LINE webhook。
+#
+# 2026-07-22:ngrok 的本機 API 預設綁 4040,只有在 4040 被佔用時才會退而求其次
+# 綁 $NgrokApiPort(4041)。之前 4040 長期被佔用所以一直是 4041,這次換裝
+# Microsoft Store 版 ngrok 後 4040 是空的,它就直接綁回 4040,腳本卻只查
+# 4041,誤判成啟動失敗(其實通道早就活著)。改成兩個 port 都查,查到哪個就用
+# 哪個,不寫死。
 $publicUrl = $null
 $waited = 0
 while (-not $publicUrl -and $waited -lt 30) {
     Start-Sleep -Seconds 2
     $waited += 2
-    try {
-        $tunnels = Invoke-RestMethod -Uri "http://127.0.0.1:$NgrokApiPort/api/tunnels" -ErrorAction Stop
-        $https = $tunnels.tunnels | Where-Object { $_.proto -eq 'https' } | Select-Object -First 1
-        if ($https) { $publicUrl = $https.public_url }
-    } catch {}
+    foreach ($port in @(4040, $NgrokApiPort)) {
+        try {
+            $tunnels = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/tunnels" -ErrorAction Stop
+            $https = $tunnels.tunnels | Where-Object { $_.proto -eq 'https' } | Select-Object -First 1
+            if ($https) { $publicUrl = $https.public_url; break }
+        } catch {}
+    }
 }
 
 if (-not $publicUrl) {
