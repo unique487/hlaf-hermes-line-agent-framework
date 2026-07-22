@@ -247,6 +247,52 @@ class Settings(BaseSettings):
     groupbot_admin_mcp_workdir: str = r"C:\Users\user\group-bot-scripts\opencode-serve-mcp-workdir"
     groupbot_admin_mcp_idle_timeout_seconds: int = 1800
 
+    # --- Codex CLI brain (2026-07-22, see app/services/codex_agent.py) ---
+    # Which brain answers messages: "opencode" (default, unchanged behaviour)
+    # or "codex". Flipping this is the entire migration switch — every
+    # opencode_* setting/script above stays untouched either way.
+    groupbot_brain: str = "opencode"
+
+    # Path to the codex CLI executable (see app/services/codex_agent.py).
+    groupbot_codex_bin: str = r"C:\Users\user\AppData\Roaming\npm\codex.cmd"
+
+    # Unlike opencode serve, codex has no persistent process to talk to —
+    # every message spawns one `codex exec` subprocess (see
+    # app/services/codex_agent.py's module docstring for why: codex is a
+    # native compiled binary with no measured fixed cold-start tax, unlike
+    # opencode's Bun-runtime `opencode serve`, so there's no persistent
+    # server/worker-pool to leak or wedge in the first place).
+    # mini first — cheaper, and only falls back to the full model if mini
+    # fails/times out (2026-07-22, user preference).
+    groupbot_codex_model_chain: str = "gpt-5.4-mini,gpt-5.5"
+    groupbot_codex_model_timeout_seconds: int = 45
+    groupbot_codex_primary_model_timeout_seconds: int = 20
+
+    # Working directory for group-bot codex calls — its AGENTS.md carries
+    # the 總務處 persona (copied from
+    # C:\Users\user\.config\opencode\agents\groupbot.md, opencode's own
+    # copy untouched). Sandboxed read-only: this agent must never touch
+    # files/commands, matching groupbot.md's `tools: *: false` frontmatter.
+    groupbot_codex_workdir: str = r"C:\Users\user\group-bot-scripts\codex-groupbot-workdir"
+
+    # --- Codex admin DM agent ---
+    groupbot_codex_admin_model_chain: str = "gpt-5.4-mini,gpt-5.5"
+    groupbot_codex_admin_model_timeout_seconds: int = 90
+    groupbot_codex_admin_primary_model_timeout_seconds: int = 45
+    # Its own dedicated AGENTS.md (copied from admin.md); deliberately not
+    # C:\Users\user\opencode-admin-workdir — no sharing with the opencode
+    # path at all. Full tool access (danger-full-access sandbox), matching
+    # admin.md's "no per-tool confirmation gate" description.
+    groupbot_codex_admin_workdir: str = r"C:\Users\user\codex-admin-workdir"
+
+    @property
+    def codex_model_chain(self) -> list[str]:
+        return [m.strip() for m in self.groupbot_codex_model_chain.split(",") if m.strip()]
+
+    @property
+    def codex_admin_model_chain(self) -> list[str]:
+        return [m.strip() for m in self.groupbot_codex_admin_model_chain.split(",") if m.strip()]
+
     @property
     def opencode_serve_base_url(self) -> str:
         return f"http://{self.groupbot_opencode_serve_host}:{self.groupbot_opencode_serve_port}"

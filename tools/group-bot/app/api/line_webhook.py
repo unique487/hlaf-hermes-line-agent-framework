@@ -6,10 +6,18 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from app.config import get_settings
 from app.logger import logger
-from app.services import allowlist, conversation, opencode_agent
+from app.services import allowlist, codex_agent, conversation, opencode_agent
 from app.utils.line_signature import verify_line_signature
 
 router = APIRouter(tags=["line"])
+
+
+def _brain():
+    """Which brain module answers messages, controlled by GROUPBOT_BRAIN
+    ("opencode", the default, or "codex" — see app/services/codex_agent.py's
+    module docstring for why the two exist side by side and
+    app/config.py's groupbot_brain docstring for the switch itself)."""
+    return codex_agent if get_settings().groupbot_brain == "codex" else opencode_agent
 
 
 @router.post("/line/webhook")
@@ -76,7 +84,7 @@ async def line_webhook(
             is_reply_to_bot = conversation.is_reply_to_bot(group_id, quoted_message_id)
 
             background_tasks.add_task(
-                opencode_agent.handle_message,
+                _brain().handle_message,
                 group_id,
                 user_id,
                 reply_token,
@@ -94,7 +102,7 @@ async def line_webhook(
                 logger.info(f"Ignored DM from non-admin user {user_id[:8]}…")
                 continue
             background_tasks.add_task(
-                opencode_agent.handle_admin_message, user_id, reply_token, text
+                _brain().handle_admin_message, user_id, reply_token, text
             )
 
     return {"status": "ok"}
