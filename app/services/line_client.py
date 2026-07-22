@@ -29,13 +29,26 @@ def _text_messages(text: str) -> list[dict[str, str]]:
 
 
 async def reply_text(reply_token: str, text: str) -> bool:
-    """Reply using a webhook replyToken. Returns True on success."""
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            f"{LINE_API_BASE}/message/reply",
-            headers=_headers(),
-            json={"replyToken": reply_token, "messages": _text_messages(text)},
-        )
+    """Reply using a webhook replyToken. Returns True on success, False on
+    any failure — including network errors (timeout/connect/etc), not just
+    a non-200 status. A raised httpx exception here used to propagate out
+    of send_text and skip the push_text fallback entirely: a transient
+    network blip to api.line.me meant an already-computed answer was
+    silently lost instead of falling back to push (confirmed 2026-07-21:
+    this exact traceback — httpx.ConnectTimeout escaping reply_text — was
+    the reason this account stopped responding; same bug fixed in the
+    sibling groupbot project's line_client.py).
+    """
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{LINE_API_BASE}/message/reply",
+                headers=_headers(),
+                json={"replyToken": reply_token, "messages": _text_messages(text)},
+            )
+    except httpx.HTTPError as exc:
+        logger.warning(f"LINE reply request failed: {exc!r}")
+        return False
     if resp.status_code == 200:
         return True
     logger.warning(f"LINE reply failed ({resp.status_code}): {resp.text}")
@@ -43,13 +56,21 @@ async def reply_text(reply_token: str, text: str) -> bool:
 
 
 async def push_text(user_id: str, text: str) -> bool:
-    """Push a message directly to a user (fallback when replyToken expired)."""
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            f"{LINE_API_BASE}/message/push",
-            headers=_headers(),
-            json={"to": user_id, "messages": _text_messages(text)},
-        )
+    """Push a message directly to a user (fallback when replyToken expired
+    or reply_text hit a network error). Same reasoning as reply_text above:
+    a network exception here must not propagate — it's already the last
+    fallback, so the caller only needs to know push succeeded or not.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{LINE_API_BASE}/message/push",
+                headers=_headers(),
+                json={"to": user_id, "messages": _text_messages(text)},
+            )
+    except httpx.HTTPError as exc:
+        logger.error(f"LINE push request failed: {exc!r}")
+        return False
     if resp.status_code == 200:
         return True
     logger.error(f"LINE push failed ({resp.status_code}): {resp.text}")
@@ -80,28 +101,32 @@ async def get_message_content(message_id: str) -> tuple[bytes, str]:
 async def push_confirm(user_id: str, description: str) -> bool:
     """Push a Yes/No confirm-template message; buttons send fixed reply text."""
     text = (description.strip() or "需要確認")[:MAX_CONFIRM_TEXT_LEN]
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            f"{LINE_API_BASE}/message/push",
-            headers=_headers(),
-            json={
-                "to": user_id,
-                "messages": [
-                    {
-                        "type": "template",
-                        "altText": text,
-                        "template": {
-                            "type": "confirm",
-                            "text": text,
-                            "actions": [
-                                {"type": "message", "label": "✅ 執行", "text": CONFIRM_YES},
-                                {"type": "message", "label": "❌ 取消", "text": CONFIRM_NO},
-                            ],
-                        },
-                    }
-                ],
-            },
-        )
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{LINE_API_BASE}/message/push",
+                headers=_headers(),
+                json={
+                    "to": user_id,
+                    "messages": [
+                        {
+                            "type": "template",
+                            "altText": text,
+                            "template": {
+                                "type": "confirm",
+                                "text": text,
+                                "actions": [
+                                    {"type": "message", "label": "✅ 執行", "text": CONFIRM_YES},
+                                    {"type": "message", "label": "❌ 取消", "text": CONFIRM_NO},
+                                ],
+                            },
+                        }
+                    ],
+                },
+            )
+    except httpx.HTTPError as exc:
+        logger.error(f"LINE confirm push request failed: {exc!r}")
+        return False
     if resp.status_code == 200:
         return True
     logger.error(f"LINE confirm push failed ({resp.status_code}): {resp.text}")

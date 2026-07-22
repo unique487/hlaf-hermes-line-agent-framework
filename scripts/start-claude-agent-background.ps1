@@ -2,7 +2,10 @@
 # 給 Windows工作排程器(Task Scheduler)在登入時呼叫用。
 
 $RepoPath = "G:\我的雲端硬碟\claude\HLAF-Hermes Line Agent Framework\.claude\worktrees\hermes-agent-official-account-833679"
-$NgrokExe = "C:\Users\user\AppData\Local\Microsoft\WinGet\Packages\Ngrok.Ngrok_Microsoft.Winget.Source_8wekyb3d8bbwe\ngrok.exe"
+# 2026-07-22:原本 WinGet 裝的 ngrok.exe 因為本機端點防護攔截、版本太舊等
+# 一連串問題已停用,改用 Microsoft Store 版(執行別名),詳見 group-bot 那支
+# start-group-bot-background.ps1 同一天的修改記錄。
+$NgrokExe = "C:\Users\user\AppData\Local\Microsoft\WindowsApps\ngrok.exe"
 $NgrokConfig = "C:\Users\user\.ngrok-hermes.yml"
 $UvExe = "C:\Users\user\AppData\Local\hermes\bin\uv.exe"
 $BootLog = "C:\Users\user\claude-agent-boot.log"
