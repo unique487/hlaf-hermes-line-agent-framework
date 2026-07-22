@@ -154,15 +154,17 @@ class Settings(BaseSettings):
     # 2026-07-22 08:xx: free-first (the overnight outage turned out to be an
     # opencode-serve worker-pool leak, not the free models themselves —
     # fixed by aborting on timeout).
-    # 2026-07-22 (later same day, twice): reordered again — this default is
-    # now dead code in practice, see GROUPBOT_ADMIN_MODEL_CHAIN in .env for
-    # the live value and full history (same NVIDIA-account-concurrency-cap
-    # finding as groupbot_model_chain above applies identically here).
-    # Kept in sync with that override as the fallback default in case the
-    # .env line is ever removed.
+    # 2026-07-22 (later same day, three times): reordered again — this
+    # default is now dead code in practice, see GROUPBOT_ADMIN_MODEL_CHAIN
+    # in .env for the live value and full history. Latest change: admin
+    # starts on openrouter/nemotron (group starts on nvidia-direct) so the
+    # two channels don't collide on the same provider's shared concurrency
+    # cap when both get used around the same time. Kept in sync with that
+    # override as the fallback default in case the .env line is ever
+    # removed.
     groupbot_admin_model_chain: str = (
-        "nvidia/deepseek-ai/deepseek-v4-flash,"
         "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free,"
+        "nvidia/deepseek-ai/deepseek-v4-flash,"
         "opencode/deepseek-v4-flash-free,"
         "opencode/big-pickle"
     )
@@ -208,7 +210,15 @@ class Settings(BaseSettings):
     groupbot_admin_cwd: str = r"C:\Users\user\opencode-admin-workdir"
     # Admin tasks (actually running tools) can run far longer than a plain
     # Q&A reply — give much more headroom than the group agent's 45s.
-    groupbot_admin_model_timeout_seconds: int = 180
+    # 2026-07-22: cut from 180 to 90 — live incident showed the admin
+    # chain's 3 non-primary rungs (opencode-free, big-pickle, plus
+    # whichever of openrouter/nvidia isn't rung 0) hitting their FULL 180s
+    # ceiling one after another when providers are degraded, so a total
+    # failure took ~6-7 minutes end-to-end before the user even got the
+    # "抱歉,所有模型都暫時失敗了" apology. 90s is still 2x the group
+    # agent's 45s (keeps meaningful headroom for a rung that's genuinely
+    # mid tool-call), but halves the worst-case total wait.
+    groupbot_admin_model_timeout_seconds: int = 90
 
     # --- On-demand MCP-enabled serve for admin DMs (2026-07-22) ---
     # A SEPARATE opencode serve process (its own port), only ever started
