@@ -32,6 +32,8 @@ expects a reply).
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import re
 import time
 import uuid
@@ -250,9 +252,15 @@ async def run_model_chain(
     title_prefix: str = "groupbot",
     model_chain: list[str] | None = None,
     primary_timeout_seconds: int | None = None,
+    base_url_override: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Try each model in settings.model_chain (or the given model_chain
     override, e.g. settings.admin_model_chain) in order until one succeeds.
+
+    base_url_override lets a caller point this at a different opencode
+    serve than the main group-bot one (see handle_admin_message's
+    NotebookLM MCP routing) — used instead of settings.opencode_serve_base_url
+    when set.
 
     Returns (answer, model_id_used); (None, None) if every rung failed.
     """
@@ -263,7 +271,7 @@ async def run_model_chain(
     chain = model_chain if model_chain is not None else settings.model_chain
     _ = f"{title_prefix}-{uuid.uuid4().hex[:8]}"  # kept for log correlation only
 
-    async with httpx.AsyncClient(base_url=settings.opencode_serve_base_url) as client:
+    async with httpx.AsyncClient(base_url=base_url_override or settings.opencode_serve_base_url) as client:
         for index, model in enumerate(chain):
             # Rung 0 (the preferred model) gets a shorter leash by default:
             # it's an opportunistic free-tier pool that's often degraded,
@@ -341,6 +349,170 @@ async def handle_message(
     await line_client.send_text(reply_token, group_id, answer)
 
 
+# --- On-demand MCP-enabled serve for admin DMs (2026-07-22) ---
+#
+# See config.py's groupbot_admin_mcp_* docstring for why this is a whole
+# separate opencode serve process rather than a toggle on the shared one.
+# State (the spawned process's PID and its last-touched time) is persisted
+# to a small JSON file next to that serve's own workdir, NOT kept in an
+# in-memory global — this module runs inside a FastAPI process that could
+# get redeployed/restarted while an admin MCP session happens to be
+# active, and idle-shutdown has to keep working (by PID, via `taskkill`)
+# even after that restart wipes any in-memory state. This is the same
+# category of bug this whole feature exists to avoid repeating (an
+# MCP-related process nobody remembers to clean up).
+
+_MCP_START_MARKERS = ("notebooklm",)
+_MCP_STOP_MARKERS = ("關閉notebooklm", "停用notebooklm", "關掉notebooklm", "notebooklm關閉", "notebooklm結束")
+
+
+def _wants_mcp_serve(text: str) -> bool:
+    lowered = text.lower()
+    return any(m in lowered for m in _MCP_START_MARKERS)
+
+
+def _wants_mcp_shutdown(text: str) -> bool:
+    lowered = text.lower()
+    return any(m in lowered for m in _MCP_STOP_MARKERS)
+
+
+def _mcp_state_path(settings: Settings) -> str:
+    return os.path.join(settings.groupbot_admin_mcp_workdir, ".mcp_state.json")
+
+
+def _read_mcp_state(settings: Settings) -> dict:
+    try:
+        with open(_mcp_state_path(settings), encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_mcp_state(settings: Settings, *, pid: int | None, last_active: float) -> None:
+    os.makedirs(settings.groupbot_admin_mcp_workdir, exist_ok=True)
+    with open(_mcp_state_path(settings), "w", encoding="utf-8") as fh:
+        json.dump({"pid": pid, "last_active": last_active}, fh)
+
+
+def _touch_mcp_active(settings: Settings) -> None:
+    state = _read_mcp_state(settings)
+    _write_mcp_state(settings, pid=state.get("pid"), last_active=time.time())
+
+
+async def _mcp_serve_alive(settings: Settings) -> bool:
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"http://{settings.groupbot_opencode_serve_host}:{settings.groupbot_admin_mcp_serve_port}/doc",
+                timeout=3,
+            )
+            return resp.status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+# Serializes every start/stop of the on-demand MCP serve. Without this, two
+# admin DMs arriving close together (e.g. LINE retrying a webhook delivery)
+# could both see "not alive" and race to spawn — the loser's opencode.exe
+# fails to bind the already-taken port and dies almost immediately, but
+# _write_mcp_state() below is called unconditionally right after spawning
+# (before the readiness wait), so whichever spawn's state-file write lands
+# LAST wins the PID slot. If that's the loser's already-dead PID, the
+# winner's real, still-running process becomes untracked — nothing (not a
+# manual "關閉notebooklm", not the idle timeout) can ever find its PID to
+# kill it again. That's exactly the kind of forgotten leftover process this
+# whole feature exists to prevent, so the two functions that mutate
+# start/stop state serialize through this lock instead of racing.
+_mcp_serve_lock = asyncio.Lock()
+
+
+async def ensure_mcp_serve_running(settings: Settings) -> bool:
+    """Start the on-demand MCP-enabled opencode serve if it isn't already
+    up. Returns True once it's ready (or was already running), False if it
+    failed to come up within the wait window.
+    """
+    async with _mcp_serve_lock:
+        if await _mcp_serve_alive(settings):
+            _touch_mcp_active(settings)
+            return True
+
+        logger.info(f"starting on-demand MCP serve on port {settings.groupbot_admin_mcp_serve_port}")
+        os.makedirs(settings.groupbot_admin_mcp_workdir, exist_ok=True)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                settings.groupbot_opencode_bin,
+                "serve",
+                "--hostname",
+                settings.groupbot_opencode_serve_host,
+                "--port",
+                str(settings.groupbot_admin_mcp_serve_port),
+                cwd=settings.groupbot_admin_mcp_workdir,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            logger.error(f"failed to spawn MCP serve: {exc}")
+            return False
+
+        _write_mcp_state(settings, pid=proc.pid, last_active=time.time())
+
+        waited = 0.0
+        while waited < 30:
+            await asyncio.sleep(2)
+            waited += 2
+            if await _mcp_serve_alive(settings):
+                logger.info(f"MCP serve ready after {waited:.0f}s")
+                return True
+        logger.error("MCP serve did not become ready within 30s")
+        return False
+
+
+async def _kill_mcp_serve(settings: Settings) -> bool:
+    """Best-effort kill of the on-demand MCP serve by PID (from the state
+    file, so this works even after a FastAPI process restart). Returns
+    True if it was actually alive/running before this call.
+    """
+    async with _mcp_serve_lock:
+        return await _kill_mcp_serve_unlocked(settings)
+
+
+async def _kill_mcp_serve_unlocked(settings: Settings) -> bool:
+    was_alive = await _mcp_serve_alive(settings)
+    pid = _read_mcp_state(settings).get("pid")
+    if pid:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "taskkill",
+                "/PID",
+                str(pid),
+                "/F",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+        except OSError:
+            pass
+    _write_mcp_state(settings, pid=None, last_active=0.0)
+    return was_alive
+
+
+async def shutdown_mcp_serve_if_idle(settings: Settings) -> None:
+    """Opportunistic idle-shutdown check, called on every admin DM (see
+    handle_admin_message) instead of a background timer loop — the admin
+    DM handler is the only thing that ever starts this serve, so checking
+    here is enough to guarantee it never runs forever forgotten.
+    """
+    state = _read_mcp_state(settings)
+    pid = state.get("pid")
+    if not pid:
+        return
+    idle = time.time() - state.get("last_active", 0.0)
+    if idle < settings.groupbot_admin_mcp_idle_timeout_seconds:
+        return
+    logger.info(f"MCP serve idle for {idle:.0f}s, shutting down")
+    await _kill_mcp_serve(settings)
+
+
 async def handle_admin_message(user_id: str, reply_token: str, text: str) -> None:
     """Entry point for admin 1:1 DMs (see app/api/line_webhook.py).
 
@@ -352,11 +524,47 @@ async def handle_admin_message(user_id: str, reply_token: str, text: str) -> Non
     the admin allowlist check in app/services/allowlist.py is the only
     access control, since opencode serve has no way to prompt a human for
     interactive approval either.
+
+    Also handles the on-demand NotebookLM/MCP toggle: a message containing
+    "notebooklm" starts (or reuses) the separate MCP-enabled serve on
+    settings.groupbot_admin_mcp_serve_port and routes this and subsequent
+    admin messages there for as long as it stays alive (auto-shuts-down
+    after groupbot_admin_mcp_idle_timeout_seconds of inactivity, or
+    immediately on a message containing "關閉notebooklm").
     """
     settings = get_settings()
+
+    if _wants_mcp_shutdown(text):
+        was_running = await _kill_mcp_serve(settings)
+        logger.info(f"admin DM user={user_id[:8]}… requested MCP shutdown (was_running={was_running})")
+        reply = "好的,已關閉 NotebookLM 工具。" if was_running else "目前沒有在執行中,不用關。"
+        await line_client.send_text(reply_token, user_id, reply)
+        return
+
+    await shutdown_mcp_serve_if_idle(settings)
+
+    use_mcp = await _mcp_serve_alive(settings)
+    if not use_mcp and _wants_mcp_serve(text):
+        use_mcp = await ensure_mcp_serve_running(settings)
+        if not use_mcp:
+            await line_client.send_text(
+                reply_token,
+                user_id,
+                "抱歉,啟動 NotebookLM 工具失敗了,請稍後再試一次,或在電腦前直接跟我說。",
+            )
+            return
+    elif use_mcp:
+        _touch_mcp_active(settings)
+
     label = conversation.add_user_message(user_id, user_id, text)
     history = conversation.history_excluding_last(user_id)
     prompt = build_prompt(history, label, text)
+
+    base_url = (
+        f"http://{settings.groupbot_opencode_serve_host}:{settings.groupbot_admin_mcp_serve_port}"
+        if use_mcp
+        else None
+    )
 
     answer, model_used = await run_model_chain(
         prompt,
@@ -366,6 +574,7 @@ async def handle_admin_message(user_id: str, reply_token: str, text: str) -> Non
         title_prefix="admin-dm",
         model_chain=settings.admin_model_chain,
         primary_timeout_seconds=settings.groupbot_admin_primary_model_timeout_seconds,
+        base_url_override=base_url,
     )
 
     if answer is None:

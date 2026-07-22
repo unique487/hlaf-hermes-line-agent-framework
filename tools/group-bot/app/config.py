@@ -206,6 +206,33 @@ class Settings(BaseSettings):
     # Q&A reply — give much more headroom than the group agent's 45s.
     groupbot_admin_model_timeout_seconds: int = 180
 
+    # --- On-demand MCP-enabled serve for admin DMs (2026-07-22) ---
+    # A SEPARATE opencode serve process (its own port), only ever started
+    # by an admin DM containing "notebooklm" and stopped by one containing
+    # "關閉notebooklm" (see opencode_agent._wants_mcp_serve /
+    # _wants_mcp_shutdown), or auto-killed after idling past
+    # groupbot_admin_mcp_idle_timeout_seconds (checked opportunistically on
+    # every admin DM — see opencode_agent.shutdown_mcp_serve_if_idle).
+    #
+    # Deliberately a separate process from groupbot_opencode_serve_port,
+    # not a toggle on it: MCP servers are only read at serve *startup* from
+    # the project opencode.json in that process's launch cwd, so enabling
+    # MCP on the shared serve would require restarting it — aborting every
+    # in-flight group/admin conversation using it. This one lives on its
+    # own port that only an active admin MCP session ever talks to, so
+    # starting/stopping/leaving-it-idle never touches the group bot.
+    #
+    # Its workdir's opencode.json enables only notebooklm-mcp (not the
+    # other 4 global MCPs — firebase/playwright/open-computer-use/
+    # obsidian are heavier and not what this is for). This is also why the
+    # main group-bot serve had to have ALL 5 disabled in the first place:
+    # each one gets re-spawned per opencode session and never reaped,
+    # degrading a serve to send-timeouts within ~15 minutes (2026-07-22
+    # incident — see 工作筆記/opencode-serve-degradation-rootcause memory).
+    groupbot_admin_mcp_serve_port: int = 4099
+    groupbot_admin_mcp_workdir: str = r"C:\Users\user\group-bot-scripts\opencode-serve-mcp-workdir"
+    groupbot_admin_mcp_idle_timeout_seconds: int = 1800
+
     @property
     def opencode_serve_base_url(self) -> str:
         return f"http://{self.groupbot_opencode_serve_host}:{self.groupbot_opencode_serve_port}"
