@@ -148,21 +148,18 @@ class Settings(BaseSettings):
     # extra dead wait and that truncation risk. big-pickle stays in the
     # chain as a later fallback, just not first, for admin only — the group
     # bot's own chain/order is untouched.
-    # 2026-07-22: reliable-model-first order (same rationale as the group
-    # chain's GROUPBOT_MODEL_CHAIN in .env). The opencode-zen free rungs
-    # (deepseek-v4-flash-free, big-pickle) went down for hours overnight and
-    # produced zero successes — every call timed out for 45-180s while
-    # holding an opencode-serve worker, which saturated the worker pool and
-    # took the whole bot down. Putting the models that DID succeed tonight
-    # (nvidia deepseek-v4-flash, glm-5.2) first makes admin DMs actually
-    # complete and stops the worker starvation; the free rungs stay as
-    # fallback. Revert to free-first once opencode-zen recovers if cost
-    # matters more than latency.
+    # 2026-07-22 08:xx: free-first (the overnight outage turned out to be an
+    # opencode-serve worker-pool leak, not the free models themselves —
+    # fixed by aborting on timeout). User-chosen order: opencode-zen
+    # deepseek-v4-flash-free -> opencode-zen big-pickle -> nvidia
+    # deepseek-v4-flash -> nvidia glm-5.2, with the openrouter free rung
+    # demoted to last-resort fallback (not in the user's requested order),
+    # same order as the group chain (GROUPBOT_MODEL_CHAIN in .env).
     groupbot_admin_model_chain: str = (
-        "nvidia/deepseek-ai/deepseek-v4-flash,"
-        "nvidia/z-ai/glm-5.2,"
         "opencode/deepseek-v4-flash-free,"
         "opencode/big-pickle,"
+        "nvidia/deepseek-ai/deepseek-v4-flash,"
+        "nvidia/z-ai/glm-5.2,"
         "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
     )
     # Timeout for the admin chain's first rung. Unlike the group bot's
