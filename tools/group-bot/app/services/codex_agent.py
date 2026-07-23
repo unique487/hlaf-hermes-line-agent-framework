@@ -233,6 +233,12 @@ def build_prompt(
             "屬於總務處業務範圍,也請盡量給出有幫助的回應,或告知使用者"
             "你能協助的範圍與正確窗口。)"
         )
+    if history and any(label == conversation.BOT_LABEL for label, _ in history):
+        prompt += (
+            "\n\n(注意:上面對話紀錄中標示為[機器人]的是你自己最近說過的話,這次回覆"
+            "如果內容跟那些很接近,請務必換一種說法、換句子結構,不要重複同樣的"
+            "句型或舉例。)"
+        )
     return prompt
 
 
