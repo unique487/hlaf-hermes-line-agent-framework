@@ -58,6 +58,147 @@ $GenProbeTimeoutSeconds = 45
 $GenProbeModelProvider = "nvidia"
 $GenProbeModelId = "deepseek-ai/deepseek-v4-flash"
 
+# ---------------------------------------------------------------------------
+# 第二層探測:正式模型鏈(GROUPBOT_MODEL_CHAIN)本身能不能回應使用者
+# ---------------------------------------------------------------------------
+# 2026-07-23:發現上面第一層探測(刻意用不受免費池限流影響的 nvidia 模型
+# 當探針)只測得到「opencode serve 這個 process 有沒有卡死」,完全測不到
+# 「正式機器人實際在用的模型鏈(GROUPBOT_MODEL_CHAIN,目前是 opencode-zen
+# 的免費模型)本身被上游限流/帳號配額用盡」——這是兩條不相干的路徑。
+# 2026-07-23 晚上使用者訊息真的完全沒回應超過一小時,但看門狗全程顯示
+# 「recovered on its own」,因為第一層測的 nvidia 探針一直是通的。查
+# opencode/uvicorn log 證實同一時段幾乎全是明確的限流/逾時,而且已經驗證
+# 重啟對這種問題無效(手動重啟後這類錯誤計數器不降反升,代表是上游/帳號
+# 層級的狀態,本機重啟清不掉)。
+#
+# 因此新增獨立的第二層:直接用正式鏈路第一顆模型送一則輕量探針,只在乎
+# 「有沒有拿到乾淨的回覆內容」——逾時、錯誤回應、或收到 200 但內容裡含限流
+# 關鍵字,都算退化。這一層失敗時**絕對不重啟**(重啟對上游限流無效,還會
+# 腰斬正在處理中的真實請求),只累加自己獨立的計數器、寫/刷新獨立的告警
+# 旗標檔、記 log,完全不影響第一層的計數器跟重啟判斷。
+#
+# 已知限制:.env 的 GROUPBOT_ADMIN_MODEL_CHAIN 第一顆目前也是免費模型
+# (opencode/deepseek-v4-flash-free),代表免費池被限流時,機器人連透過
+# LINE 私訊主動通知管理員本人都做不到——這一層能做的只有寫旗標檔 + 記
+# log,無法「主動私訊通知使用者本人」,要人工去看旗標檔或 log 才會發現。
+#
+# 探測模型優先從 .env 的 GROUPBOT_MODEL_CHAIN 第一顆讀(用第一個 "/" 拆
+# provider/model,跟 app/services/opencode_agent.py 的 _split_provider_model
+# 拆法一致),讀取/解析失敗就退回下面的寫死預設值,並記一筆 log 說明用了
+# fallback。
+$GroupBotEnvFile = Join-Path $RepoPath ".env"
+$ProdProbeModelProvider = "opencode"
+$ProdProbeModelId = "deepseek-v4-flash-free"
+$prodProbeModelSource = "hard-coded fallback"
+try {
+    if (Test-Path $GroupBotEnvFile) {
+        $envLine = Get-Content $GroupBotEnvFile -ErrorAction Stop | Where-Object { $_ -match '^\s*GROUPBOT_MODEL_CHAIN\s*=' } | Select-Object -Last 1
+        if ($envLine) {
+            $chainValue = ($envLine -split '=', 2)[1].Trim()
+            $firstModel = ($chainValue -split ',')[0].Trim()
+            if ($firstModel -and $firstModel.Contains('/')) {
+                $slashIndex = $firstModel.IndexOf('/')
+                $ProdProbeModelProvider = $firstModel.Substring(0, $slashIndex)
+                $ProdProbeModelId = $firstModel.Substring($slashIndex + 1)
+                $prodProbeModelSource = ".env GROUPBOT_MODEL_CHAIN rung 0"
+            }
+        }
+    }
+} catch {
+    # 解析失敗就靜靜留在上面的寫死預設值,下面會記一筆 log 交代原因。
+}
+
+# 逾時秒數對齊 .env 的 GROUPBOT_MODEL_TIMEOUT_SECONDS(目前 45 秒),讀不到
+# 就用 45 當預設——跟正式機器人自己等多久才判定這顆模型逾時保持一致。
+$ProdProbeTimeoutSeconds = 45
+try {
+    if (Test-Path $GroupBotEnvFile) {
+        $timeoutLine = Get-Content $GroupBotEnvFile -ErrorAction Stop | Where-Object { $_ -match '^\s*GROUPBOT_MODEL_TIMEOUT_SECONDS\s*=' } | Select-Object -Last 1
+        if ($timeoutLine) {
+            $timeoutValue = ($timeoutLine -split '=', 2)[1].Trim()
+            $parsedTimeout = 0
+            if ([int]::TryParse($timeoutValue, [ref]$parsedTimeout) -and $parsedTimeout -gt 0) {
+                $ProdProbeTimeoutSeconds = $parsedTimeout
+            }
+        }
+    }
+} catch {}
+
+# 限流關鍵字跟 app/services/opencode_agent.py 的 _RATE_LIMIT_MARKERS 保持
+# 一致(2026-07-23)——就算 HTTP 拿到 200,只要回應內容含這些字樣,也算
+# 退化,不算健康。改動 app 那邊的清單時記得回來同步這裡。
+$ProdProbeRateLimitMarkers = @(
+    "429",
+    "rate limit",
+    "rate_limit",
+    "quota",
+    "too many requests",
+    "worker local total request limit",
+    "resourceexhausted",
+    "resource_exhausted"
+)
+
+$ProdProbeMaxConsecutiveFailures = 3
+$ProdProbeFailCountFile = "C:\Users\user\group-bot-prodprobe-failcount.txt"
+$DegradedSinceFile = "C:\Users\user\group-bot-degraded-since.txt"
+$DegradedFlagFile = "C:\Users\user\group-bot-DEGRADED-RATE-LIMITED.txt"
+$DegradedFlagRefreshSeconds = 1800
+
+function Invoke-ProdChainProbe($Base) {
+    <#
+        測「正式模型鏈第一顆模型」本身能不能回應使用者(第二層探測)。
+        跟第一層極性相反:第一層只要 serve 有回 HTTP 就算通過(只在乎
+        process 沒卡死);這裡要真的拿到乾淨的回覆內容才算健康——逾時、
+        錯誤回應、或收到 200 但內容含限流關鍵字,都算退化。
+        失敗時只回傳結果供呼叫端記錄/告警,這個函式本身絕對不會呼叫
+        restart-opencode-serve.ps1,也不會動到第一層的 $FailCountFile /
+        $LastRestartFile。
+    #>
+    $degraded = $false
+    $reason = ""
+    $sid2 = $null
+    try {
+        $sid2 = (Invoke-RestMethod -Uri "$Base/session" -Method Post -Body '{}' -ContentType 'application/json' -TimeoutSec 10 -ErrorAction Stop).id
+        try {
+            $body2 = @{
+                parts = @(@{ type = 'text'; text = 'ping' })
+                model = @{ providerID = $ProdProbeModelProvider; modelID = $ProdProbeModelId }
+                agent = 'groupbot'
+            } | ConvertTo-Json -Depth 6
+            try {
+                $msg2 = Invoke-RestMethod -Uri "$Base/session/$sid2/message" -Method Post -Body $body2 -ContentType 'application/json' -TimeoutSec $ProdProbeTimeoutSeconds -ErrorAction Stop
+                $answerText = ""
+                if ($msg2 -and $msg2.parts) {
+                    $answerText = (($msg2.parts | Where-Object { $_.type -eq 'text' } | ForEach-Object { $_.text }) -join "")
+                }
+                $lowerAnswer = $answerText.ToLower()
+                $hitMarker = $ProdProbeRateLimitMarkers | Where-Object { $lowerAnswer.Contains($_) } | Select-Object -First 1
+                if ($hitMarker) {
+                    $degraded = $true
+                    $reason = "got HTTP 200 but response content looks rate-limited (matched '$hitMarker')"
+                } elseif (-not $answerText) {
+                    # 沒有任何 text part 也當退化(拿不到乾淨回覆)。
+                    $degraded = $true
+                    $reason = "got HTTP 200 but no text part in response"
+                }
+            } catch {
+                # 跟第一層不同:這裡不區分「有 HTTP 回應」跟「完全沒回應」,
+                # 逾時、4xx/5xx 錯誤回應,通通算退化——因為第二層在乎的是
+                # 「使用者真的收不收得到回覆」,不是「process 有沒有卡死」。
+                $degraded = $true
+                $reason = "generation request failed: $($_.Exception.Message)"
+            }
+        } finally {
+            try { Invoke-RestMethod -Uri "$Base/session/$sid2" -Method Delete -TimeoutSec 5 -ErrorAction SilentlyContinue | Out-Null } catch {}
+        }
+    } catch {
+        $degraded = $true
+        $reason = "couldn't even create a session for prod-chain probe: $($_.Exception.Message)"
+    }
+
+    return [PSCustomObject]@{ Degraded = $degraded; Reason = $reason }
+}
+
 # 2026-07-22:發現這支腳本本身就是造成「回覆異常慢」的元兇——探針模型
 # opencode/deepseek-v4-flash-free 常被上游 opencode-zen 免費池限流,限流
 # 時 serve 其實仍活著、很快就回應(HTTP 錯誤狀態或內嵌 error 文字),但舊版
@@ -154,6 +295,94 @@ if ($docOk) {
     }
 } else {
     Write-Log "/doc liveness probe failed"
+}
+
+# 第二層:正式模型鏈本身能不能回應使用者(獨立於上面第一層,只要 /doc 通過、
+# serve process 確定還活著才有跑的意義)。失敗絕對不會觸發重啟,只寫旗標檔
+# + log,不影響上面第一層的 $failCount / $healthy / 之後的重啟判斷。
+if ($docOk) {
+    $prodProbeResult = Invoke-ProdChainProbe -Base $base
+
+    $prodFailCount = 0
+    if (Test-Path $ProdProbeFailCountFile) {
+        $rawProd = Get-Content $ProdProbeFailCountFile -Raw -ErrorAction SilentlyContinue
+        if ($rawProd) {
+            $parsedProd = 0
+            if ([int]::TryParse($rawProd.Trim(), [ref]$parsedProd)) { $prodFailCount = $parsedProd }
+        }
+    }
+
+    if ($prodProbeResult.Degraded) {
+        $prodFailCount = $prodFailCount + 1
+        # 一旦超過門檻就不再無限往上累加(只是拿來判斷「有沒有連續失敗到
+        # 門檻」跟驅動下面的防洗版刷新判斷,封頂在門檻值,log 才不會出現
+        # 像 17/3 這種洗版式的數字,狀態仍然由 $DegradedSinceFile 準確追蹤)。
+        if ($prodFailCount -gt $ProdProbeMaxConsecutiveFailures) { $prodFailCount = $ProdProbeMaxConsecutiveFailures }
+        "$prodFailCount" | Set-Content -Path $ProdProbeFailCountFile -Encoding UTF8
+        Write-Log "second-tier (prod chain $ProdProbeModelProvider/$ProdProbeModelId) probe failed: $($prodProbeResult.Reason) (consecutive=$prodFailCount/$ProdProbeMaxConsecutiveFailures)"
+
+        if ($prodFailCount -ge $ProdProbeMaxConsecutiveFailures) {
+            $nowEpoch2 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+            $degradedSinceEpoch = 0
+            if (Test-Path $DegradedSinceFile) {
+                $rawSince = Get-Content $DegradedSinceFile -Raw -ErrorAction SilentlyContinue
+                if ($rawSince) {
+                    $parsedSince = 0.0
+                    if ([double]::TryParse($rawSince.Trim(), [ref]$parsedSince)) { $degradedSinceEpoch = $parsedSince }
+                }
+            }
+            $isNewlyDegraded = $false
+            if ($degradedSinceEpoch -le 0) {
+                $degradedSinceEpoch = $nowEpoch2
+                "$degradedSinceEpoch" | Set-Content -Path $DegradedSinceFile -Encoding UTF8
+                $isNewlyDegraded = $true
+            }
+
+            $lastFlagWriteEpoch = 0
+            if (Test-Path $DegradedFlagFile) {
+                $flagInfo = Get-Item $DegradedFlagFile -ErrorAction SilentlyContinue
+                if ($flagInfo) { $lastFlagWriteEpoch = ([DateTimeOffset]$flagInfo.LastWriteTimeUtc).ToUnixTimeSeconds() }
+            }
+            $secondsSinceFlagWrite = $nowEpoch2 - $lastFlagWriteEpoch
+
+            # 防洗版:旗標檔不是每 2 分鐘重寫,新進退化狀態立刻寫一次,之後
+            # 每隔 $DegradedFlagRefreshSeconds(預設 30 分鐘)才刷新內容跟 log。
+            if ($isNewlyDegraded -or -not (Test-Path $DegradedFlagFile) -or $secondsSinceFlagWrite -ge $DegradedFlagRefreshSeconds) {
+                $durationMinutes = [Math]::Round(($nowEpoch2 - $degradedSinceEpoch) / 60, 1)
+                $flagBody = @"
+GroupBot 正式模型鏈退化告警(第二層探測)
+================================================
+偵測時間: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+已持續: 約 $durationMinutes 分鐘(自 $([DateTimeOffset]::FromUnixTimeSeconds($degradedSinceEpoch).ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss')) 起)
+探測用模型: $ProdProbeModelProvider/$ProdProbeModelId(來源: $prodProbeModelSource)
+連續失敗次數: $prodFailCount(門檻 $ProdProbeMaxConsecutiveFailures)
+最近一次失敗原因: $($prodProbeResult.Reason)
+
+已採取動作: 僅記錄告警,未重啟 opencode serve(重啟對上游限流/帳號配額
+用盡無效——已實測驗證,重啟後這類錯誤計數器不降反升,代表是上游/帳號
+層級的狀態,本機重啟清不掉)。
+
+已知限制: GROUPBOT_ADMIN_MODEL_CHAIN 第一顆目前同樣是免費模型,免費池
+被限流時機器人連透過 LINE 私訊主動通知使用者本人都做不到,只能靠這個
+旗標檔跟 $WatchdogLog 被人工發現。
+
+第一層(opencode serve process 存活)探測結果: 正常(/doc 通過)。
+"@
+                $flagBody | Set-Content -Path $DegradedFlagFile -Encoding UTF8
+                Write-Log "second-tier ALERT: prod model chain looks rate-limited/degraded for ~${durationMinutes}min, flag file refreshed at $DegradedFlagFile (not restarting - restart is known ineffective for upstream rate limits)"
+            }
+        }
+    } else {
+        if ($prodFailCount -gt 0) {
+            Write-Log "second-tier (prod chain) recovered on its own (was $prodFailCount consecutive failed probes)"
+        }
+        "0" | Set-Content -Path $ProdProbeFailCountFile -Encoding UTF8
+        if (Test-Path $DegradedSinceFile) { Remove-Item $DegradedSinceFile -Force -ErrorAction SilentlyContinue }
+        if (Test-Path $DegradedFlagFile) {
+            Remove-Item $DegradedFlagFile -Force -ErrorAction SilentlyContinue
+            Write-Log "second-tier: prod model chain flag cleared - recovered"
+        }
+    }
 }
 
 if ($healthy) {
