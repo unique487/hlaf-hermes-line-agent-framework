@@ -1,0 +1,22 @@
+# 金鑰與環境變數 — 絕對不要 commit
+.env
+.env.*
+!.env.example
+
+# 提示詞原文（含承辦人姓名/分機表，不得進公開 repo）
+*group_system_prompt*
+*system_prompt.txt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# 日誌
+logs/
+*.log
