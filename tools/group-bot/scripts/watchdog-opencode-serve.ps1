@@ -86,6 +86,13 @@ $GenProbeModelId = "deepseek-ai/deepseek-v4-flash"
 # provider/model,跟 app/services/opencode_agent.py 的 _split_provider_model
 # 拆法一致),讀取/解析失敗就退回下面的寫死預設值,並記一筆 log 說明用了
 # fallback。
+# 2026-07-24:使用者反映每 2 分鐘一次的第二層探測(真的送一則 ping 給正式
+# 模型鏈第一顆,目前是 opencode-zen 免費帳號)會計入該帳號的呼叫次數/token
+# 額度,要求避免這個行為。改成預設關閉,程式碼保留以便之後想重新啟用時
+# 只要把這個開關改回 $true 即可,不用重寫邏輯。第一層(nvidia 探針)不受
+# 影響,繼續每 2 分鐘跑,因為那不算 opencode-zen 額度。
+$EnableProdChainProbe = $false
+
 $GroupBotEnvFile = Join-Path $RepoPath ".env"
 $ProdProbeModelProvider = "opencode"
 $ProdProbeModelId = "deepseek-v4-flash-free"
@@ -300,7 +307,7 @@ if ($docOk) {
 # 第二層:正式模型鏈本身能不能回應使用者(獨立於上面第一層,只要 /doc 通過、
 # serve process 確定還活著才有跑的意義)。失敗絕對不會觸發重啟,只寫旗標檔
 # + log,不影響上面第一層的 $failCount / $healthy / 之後的重啟判斷。
-if ($docOk) {
+if ($docOk -and $EnableProdChainProbe) {
     $prodProbeResult = Invoke-ProdChainProbe -Base $base
 
     $prodFailCount = 0
