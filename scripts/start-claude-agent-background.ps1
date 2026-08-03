@@ -1,7 +1,9 @@
 ﻿# 開機/登入時背景啟動:FastAPI 伺服器 + ngrok 通道(都隱藏視窗)
 # 給 Windows工作排程器(Task Scheduler)在登入時呼叫用。
 
-$RepoPath = "G:\我的雲端硬碟\claude\HLAF-Hermes Line Agent Framework\.claude\worktrees\hermes-agent-official-account-833679"
+# 2026-08-03:worktree 已用 `git worktree move` 移到 .claude/worktrees 之外的
+# 固定路徑(production-worktrees/),不會再被 worktree 清理動到。
+$RepoPath = "G:\我的雲端硬碟\claude\HLAF-Hermes Line Agent Framework\production-worktrees\claude-xiaoning"
 # 2026-07-22:原本 WinGet 裝的 ngrok.exe 因為本機端點防護攔截、版本太舊等
 # 一連串問題已停用,改用 Microsoft Store 版(執行別名),詳見 group-bot 那支
 # start-group-bot-background.ps1 同一天的修改記錄。
