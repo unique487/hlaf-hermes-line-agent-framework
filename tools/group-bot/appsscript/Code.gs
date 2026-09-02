@@ -33,7 +33,7 @@
 // 限流時整個安靜下來。這兩個型號之後可能同樣過期,發現打不通時上
 // AI Studio 選型頁(aistudio.google.com,右上角模型選單)確認目前
 // 可用型號與定價,直接改這個陣列就好,不用改其他程式碼。
-const MODEL_CHAIN = ['gemini-3.5-flash-lite', 'gemini-3.7-flash'];
+const MODEL_CHAIN = ['gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.5-flash'];
 
 // 每個群組/私訊保留的對話輪數(含機器人自己的回覆),對應原本
 // GROUPBOT_CONTEXT_WINDOW。CacheService 最長只能存 6 小時,比 Python
